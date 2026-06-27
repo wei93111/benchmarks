@@ -80,7 +80,7 @@ std::vector<torch::Tensor> ScoreData_ongpu(torch::Tensor query, // B, N1, 4, H, 
     
     dim3 totalBlocks(B, N1, 4);
     dim3 threadsPerBlock(THREADS_PER_WARP);
-    AT_DISPATCH_FLOATING_TYPES(query.type(), "ScoreData_ongpu", ([&] {
+    AT_DISPATCH_FLOATING_TYPES(query.scalar_type(), "ScoreData_ongpu", ([&] {
       ScoreData<scalar_t><<<totalBlocks, threadsPerBlock, shared_memory_per_block * sizeof(scalar_t)>>>(
           query.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>(),
           key.packed_accessor32<scalar_t,4,torch::RestrictPtrTraits>(),
@@ -168,7 +168,7 @@ std::vector<torch::Tensor> ScoreData_backward_ongpu(torch::Tensor grad_output1, 
     dim3 threadsPerBlock(THREADS_PER_WARP);
     
     
-    AT_DISPATCH_FLOATING_TYPES(key.type(), "ScoreDatabackward_ongpu", ([&] {
+    AT_DISPATCH_FLOATING_TYPES(key.scalar_type(), "ScoreDatabackward_ongpu", ([&] {
       ScoreDataBackward<scalar_t><<<totalBlocks, threadsPerBlock, shared_memory_per_block * sizeof(scalar_t)>>>(
           grad_output1.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>(),
           query.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>(),
