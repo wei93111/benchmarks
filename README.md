@@ -135,7 +135,7 @@ Timing method:
 Run the full CPU latency sweep:
 
 ```bash
-taskset -c 0 python3 benchmarks/cpu_speed.py
+python3 benchmarks/cpu_speed.py
 ```
 
 Output:
@@ -147,8 +147,7 @@ benchmarks/results/cpu_latency.csv
 Timing method:
 
 - `time.perf_counter()`
-- `torch.set_num_threads(1)`
-- `taskset -c 0`
+- default PyTorch/MKL CPU threading
 - 100 warmup iterations
 - 1000 timed iterations
 - discard lowest/highest 15%
@@ -207,7 +206,7 @@ benchmarks/results/power/cpu_n<N>_k<K>/rapl_power_summary.txt
 Power method:
 
 - sample idle CPU package energy for 10 seconds with RAPL
-- run sustained single-threaded attention workload for 45 seconds
+- run sustained CPU attention workload for 45 seconds with default threading
 - compute workload package power from RAPL energy delta
 - dynamic power = workload power - idle power
 

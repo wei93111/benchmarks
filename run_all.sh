@@ -13,7 +13,6 @@ HEAD_DIM=64
 WARMUP=100
 ITERS=1000
 POWER_LOOP_SECONDS=45
-CPU_THREADS=1
 
 usage() {
   cat <<EOF
@@ -123,10 +122,9 @@ fi
 
 if [[ "$RUN_SPEED" -eq 1 && "$RUN_CPU" -eq 1 ]]; then
   echo "[run-all] CPU latency sweep"
-  taskset -c 0 python3 "$SCRIPT_DIR/cpu_speed.py" \
+  python3 "$SCRIPT_DIR/cpu_speed.py" \
     --n "${N_VALUES[@]}" \
     --k "${K_VALUES[@]}" \
-    --threads "$CPU_THREADS" \
     --warmup "$WARMUP" \
     --iters "$ITERS" \
     --out "$SCRIPT_DIR/results/cpu_latency.csv"
@@ -149,8 +147,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
           python3 "$SCRIPT_DIR/cpu_power.py"
           --out "$SCRIPT_DIR/results/power/cpu_n${n}_k${k}/rapl_power_summary.txt"
           --
-          taskset -c 0
-          python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS, CPU_THREADS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS, threads=CPU_THREADS)"
+          python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
         )
         if [[ "$USE_SUDO" -eq 1 ]]; then
           sudo -E "${CPU_POWER_CMD[@]}"
