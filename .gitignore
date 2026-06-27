@@ -1,0 +1,8 @@
+# Results
+results/
+
+# Pycache
+__pycache__/
+
+# Environments
+venv/

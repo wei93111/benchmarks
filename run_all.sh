@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+
+N_VALUES=(1024 4096 16384 65536)
+K_VALUES=(4 8 16)
+
+LEVELS=4
+HEADS=1
+HEAD_DIM=64
+WARMUP=100
+ITERS=1000
+POWER_LOOP_SECONDS=45
+CPU_THREADS=1
+
+usage() {
+  cat <<EOF
+Usage:
+  benchmarks/run_all.sh [--speed-only] [--power-only] [--no-sudo]
+
+Runs the default QuadTree attention benchmark sweep:
+  n = ${N_VALUES[*]}
+  k = ${K_VALUES[*]}
+  levels=$LEVELS heads=$HEADS head_dim=$HEAD_DIM warmup=$WARMUP iters=$ITERS
+
+EOF
+}
+
+RUN_SPEED=1
+RUN_POWER=1
+USE_SUDO=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --speed-only)
+      RUN_POWER=0
+      shift
+      ;;
+    --power-only)
+      RUN_SPEED=0
+      shift
+      ;;
+    --no-sudo)
+      USE_SUDO=0
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+cd "$REPO_ROOT"
+mkdir -p "$SCRIPT_DIR/results"
+export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
+
+if [[ "$RUN_SPEED" -eq 1 ]]; then
+  echo "[run-all] GPU latency sweep"
+  python3 "$SCRIPT_DIR/gpu_speed.py" \
+    --n "${N_VALUES[@]}" \
+    --k "${K_VALUES[@]}" \
+    --warmup "$WARMUP" \
+    --iters "$ITERS" \
+    --out "$SCRIPT_DIR/results/gpu_latency.csv"
+
+  echo "[run-all] CPU latency sweep"
+  taskset -c 0 python3 "$SCRIPT_DIR/cpu_speed.py" \
+    --n "${N_VALUES[@]}" \
+    --k "${K_VALUES[@]}" \
+    --threads "$CPU_THREADS" \
+    --warmup "$WARMUP" \
+    --iters "$ITERS" \
+    --out "$SCRIPT_DIR/results/cpu_latency.csv"
+fi
+
+if [[ "$RUN_POWER" -eq 1 ]]; then
+  for n in "${N_VALUES[@]}"; do
+    for k in "${K_VALUES[@]}"; do
+      echo "[run-all] GPU power n=$n k=$k"
+      "$SCRIPT_DIR/gpu_power.sh" \
+        --out-dir "$SCRIPT_DIR/results/power/gpu_n${n}_k${k}" \
+        -- \
+        python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
+
+      echo "[run-all] CPU power n=$n k=$k"
+      CPU_POWER_CMD=(
+        python3 "$SCRIPT_DIR/cpu_power.py"
+        --out "$SCRIPT_DIR/results/power/cpu_n${n}_k${k}/rapl_power_summary.txt"
+        --
+        taskset -c 0
+        python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS, CPU_THREADS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS, threads=CPU_THREADS)"
+      )
+      if [[ "$USE_SUDO" -eq 1 ]]; then
+        sudo -E "${CPU_POWER_CMD[@]}"
+      else
+        "${CPU_POWER_CMD[@]}"
+      fi
+    done
+  done
+fi
