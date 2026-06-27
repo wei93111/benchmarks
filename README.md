@@ -94,6 +94,20 @@ configured, use:
 benchmarks/run_all.sh --no-sudo
 ```
 
+Useful selectors:
+
+```bash
+benchmarks/run_all.sh --gpu-speed-only
+benchmarks/run_all.sh --cpu-speed-only
+benchmarks/run_all.sh --gpu-power-only
+benchmarks/run_all.sh --cpu-power-only
+benchmarks/run_all.sh --gpu-only
+benchmarks/run_all.sh --cpu-only
+```
+
+Use `--gpu-power-only` when CPU RAPL permissions are unavailable and you only
+want GPU dynamic power.
+
 ## 1. GPU Speed
 
 Run the full GPU latency sweep:
@@ -145,7 +159,7 @@ Timing method:
 Run GPU power for all default configs:
 
 ```bash
-benchmarks/run_all.sh --power-only
+benchmarks/run_all.sh --gpu-power-only
 ```
 
 Or for one config:
@@ -175,13 +189,13 @@ Power method:
 Run CPU power for all default configs:
 
 ```bash
-benchmarks/run_all.sh --power-only
+benchmarks/run_all.sh --cpu-power-only
 ```
 
 If RAPL requires root, keep the default `sudo` behavior. If not:
 
 ```bash
-benchmarks/run_all.sh --power-only --no-sudo
+benchmarks/run_all.sh --cpu-power-only --no-sudo
 ```
 
 Output per config:
