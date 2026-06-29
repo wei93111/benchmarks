@@ -138,7 +138,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
         "$SCRIPT_DIR/gpu_power.sh" \
           --out-dir "$SCRIPT_DIR/results/power/gpu_n${n}_k${k}" \
           -- \
-          python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
+          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
       fi
 
       if [[ "$RUN_CPU" -eq 1 ]]; then
@@ -147,7 +147,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
           python3 "$SCRIPT_DIR/cpu_power.py"
           --out "$SCRIPT_DIR/results/power/cpu_n${n}_k${k}/cpu_pcm_power_summary.txt"
           --
-          python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
+          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
         )
         if [[ "$USE_SUDO" -eq 1 ]]; then
           sudo -E "${CPU_POWER_CMD[@]}"

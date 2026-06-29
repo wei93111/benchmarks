@@ -139,6 +139,8 @@ def run_pcm_window(
 
 
 def read_csv_rows(path: Path) -> list[list[str]]:
+    if not path.exists():
+        raise RuntimeError(f"PCM CSV was not created: {path}")
     text = path.read_text(errors="replace")
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
@@ -278,6 +280,11 @@ def main() -> None:
         log_path=workload_log,
         command=args.command,
     )
+    if returncode != 0 and not workload_csv.exists():
+        raise SystemExit(
+            f"Workload command failed with return code {returncode} before PCM wrote {workload_csv}. "
+            "Check the workload error above and rerun after fixing it."
+        )
     workload_w, workload_joules_per_sample, workload_samples = summarize_power(
         workload_csv, args.sample_interval
     )
