@@ -11,17 +11,33 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
 BENCHMARK_DIR = Path(__file__).resolve().parent
 DEFAULT_RESULTS_DIR = BENCHMARK_DIR / "results"
 DEFAULT_SAMPLE_INTERVAL = 0.5
+DEFAULT_IDLE_SECONDS = 60.0
+DEFAULT_TRIM_FRACTION = 0.15
 PLATFORM_DESCRIPTION = (
     "AWS c6i.metal; Intel Xeon Platinum 8375C Ice Lake-SP; "
     "2 sockets, 32 physical cores/socket, 64 physical cores total, "
     "128 logical cores with 2-way SMT, 2.90 GHz base"
 )
+
+
+@dataclass(frozen=True)
+class PowerStats:
+    power_w: float
+    joules_per_sample: float
+    samples: int
+    samples_kept: int
+    trim_fraction: float
+    full_mean_w: float
+    median_w: float
+    min_w: float
+    max_w: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,7 +49,8 @@ def parse_args() -> argparse.Namespace:
         help="Path to Intel PCM binary. Defaults to $PCM_BIN, ./bin/pcm, or pcm on PATH.",
     )
     parser.add_argument("--sample-interval", type=float, default=DEFAULT_SAMPLE_INTERVAL)
-    parser.add_argument("--idle-seconds", type=float, default=10.0)
+    parser.add_argument("--idle-seconds", type=float, default=DEFAULT_IDLE_SECONDS)
+    parser.add_argument("--trim-fraction", type=float, default=DEFAULT_TRIM_FRACTION)
     parser.add_argument(
         "--sudo-pcm",
         action="store_true",
@@ -51,6 +68,8 @@ def parse_args() -> argparse.Namespace:
         args.command = args.command[1:]
     if not args.command:
         parser.error("missing workload command after '--'")
+    if not 0 <= args.trim_fraction < 0.5:
+        parser.error("--trim-fraction must be in [0, 0.5)")
     return args
 
 
@@ -296,12 +315,32 @@ def extract_package_energy_samples(csv_path: Path) -> list[float]:
     )
 
 
-def summarize_power(csv_path: Path, interval: float) -> tuple[float, float, int]:
+def summarize_power(csv_path: Path, interval: float, trim_fraction: float) -> PowerStats:
     energy_samples = extract_package_energy_samples(csv_path)
     powers = [joules / interval for joules in energy_samples]
-    mean_power = sum(powers) / len(powers)
-    mean_joules = sum(energy_samples) / len(energy_samples)
-    return mean_power, mean_joules, len(energy_samples)
+    sorted_powers = sorted(powers)
+    trim_count = int(len(sorted_powers) * trim_fraction)
+    if trim_count and len(sorted_powers) > 2 * trim_count:
+        kept = sorted_powers[trim_count:-trim_count]
+    else:
+        kept = sorted_powers
+    mid = len(sorted_powers) // 2
+    if len(sorted_powers) % 2:
+        median_w = sorted_powers[mid]
+    else:
+        median_w = (sorted_powers[mid - 1] + sorted_powers[mid]) / 2.0
+    power_w = sum(kept) / len(kept)
+    return PowerStats(
+        power_w=power_w,
+        joules_per_sample=power_w * interval,
+        samples=len(powers),
+        samples_kept=len(kept),
+        trim_fraction=trim_fraction if len(kept) != len(sorted_powers) else 0.0,
+        full_mean_w=sum(powers) / len(powers),
+        median_w=median_w,
+        min_w=min(powers),
+        max_w=max(powers),
+    )
 
 
 def main() -> None:
@@ -324,7 +363,7 @@ def main() -> None:
         sudo_pcm=args.sudo_pcm,
         seconds=args.idle_seconds,
     )
-    idle_w, idle_joules_per_sample, idle_samples = summarize_power(idle_csv, args.sample_interval)
+    idle_stats = summarize_power(idle_csv, args.sample_interval, args.trim_fraction)
 
     print("[cpu-power] measuring workload package power with PCM...")
     returncode = run_pcm_window(
@@ -340,23 +379,34 @@ def main() -> None:
             f"Workload command failed with return code {returncode} before PCM wrote {workload_csv}. "
             "Check the workload error above and rerun after fixing it."
         )
-    workload_w, workload_joules_per_sample, workload_samples = summarize_power(
-        workload_csv, args.sample_interval
+    workload_stats = summarize_power(
+        workload_csv, args.sample_interval, args.trim_fraction
     )
 
-    dynamic_w = workload_w - idle_w
+    dynamic_w = workload_stats.power_w - idle_stats.power_w
     summary = (
         f"platform={PLATFORM_DESCRIPTION}\n"
         f"pcm_bin={pcm_bin}\n"
         f"sudo_pcm={args.sudo_pcm}\n"
         f"sample_interval_s={args.sample_interval:.6f}\n"
-        f"idle_power_w={idle_w:.6f}\n"
-        f"workload_power_w={workload_w:.6f}\n"
+        f"trim_fraction={args.trim_fraction:.6f}\n"
+        f"idle_power_w={idle_stats.power_w:.6f}\n"
+        f"workload_power_w={workload_stats.power_w:.6f}\n"
         f"dynamic_power_w={dynamic_w:.6f}\n"
-        f"idle_joules_per_sample={idle_joules_per_sample:.6f}\n"
-        f"workload_joules_per_sample={workload_joules_per_sample:.6f}\n"
-        f"idle_samples={idle_samples}\n"
-        f"workload_samples={workload_samples}\n"
+        f"idle_joules_per_sample={idle_stats.joules_per_sample:.6f}\n"
+        f"workload_joules_per_sample={workload_stats.joules_per_sample:.6f}\n"
+        f"idle_samples={idle_stats.samples}\n"
+        f"idle_samples_kept={idle_stats.samples_kept}\n"
+        f"idle_full_mean_power_w={idle_stats.full_mean_w:.6f}\n"
+        f"idle_median_power_w={idle_stats.median_w:.6f}\n"
+        f"idle_min_power_w={idle_stats.min_w:.6f}\n"
+        f"idle_max_power_w={idle_stats.max_w:.6f}\n"
+        f"workload_samples={workload_stats.samples}\n"
+        f"workload_samples_kept={workload_stats.samples_kept}\n"
+        f"workload_full_mean_power_w={workload_stats.full_mean_w:.6f}\n"
+        f"workload_median_power_w={workload_stats.median_w:.6f}\n"
+        f"workload_min_power_w={workload_stats.min_w:.6f}\n"
+        f"workload_max_power_w={workload_stats.max_w:.6f}\n"
         f"idle_csv={idle_csv}\n"
         f"workload_csv={workload_csv}\n"
         f"idle_log={idle_log}\n"

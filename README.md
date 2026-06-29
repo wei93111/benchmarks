@@ -220,12 +220,14 @@ CPU measurement platform:
 
 Power method:
 
-- sample idle CPU package energy for 10 seconds with Intel PCM CSV output
+- sample idle CPU package energy for 60 seconds with Intel PCM CSV output
 - run sustained CPU attention workload for 45 seconds with default threading
 - read per-socket `CPU energy` / `Proc Energy (Joules)` from PCM
 - sum socket 0 + socket 1 package energy for total CPU package power
 - divide Joules per sample by the 0.5 second PCM sampling interval to get Watts
-- dynamic power = workload power - idle power
+- report idle and workload power as 15% trimmed means
+- also record full mean, median, min/max, and kept sample counts for audit
+- dynamic power = trimmed workload power - trimmed idle power
 
 ## Energy Calculation
 
