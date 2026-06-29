@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-interval", type=float, default=DEFAULT_SAMPLE_INTERVAL)
     parser.add_argument("--idle-seconds", type=float, default=10.0)
     parser.add_argument(
+        "--sudo-pcm",
+        action="store_true",
+        help="Run only the Intel PCM process through sudo -E. The workload stays in the current user environment.",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=DEFAULT_RESULTS_DIR / "power" / "cpu_pcm_power_summary.txt",
@@ -89,11 +94,20 @@ def to_float(value: str) -> float | None:
         return None
 
 
-def start_pcm(pcm_bin: Path, interval: float, csv_path: Path, log_path: Path) -> subprocess.Popen:
+def start_pcm(
+    pcm_bin: Path,
+    interval: float,
+    csv_path: Path,
+    log_path: Path,
+    sudo_pcm: bool,
+) -> subprocess.Popen:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     log_fh = log_path.open("w")
+    command = [str(pcm_bin), str(interval), f"-csv={csv_path}"]
+    if sudo_pcm:
+        command = ["sudo", "-E", *command]
     return subprocess.Popen(
-        [str(pcm_bin), str(interval), f"-csv={csv_path}"],
+        command,
         stdout=log_fh,
         stderr=subprocess.STDOUT,
     )
@@ -120,10 +134,11 @@ def run_pcm_window(
     interval: float,
     csv_path: Path,
     log_path: Path,
+    sudo_pcm: bool,
     seconds: float | None = None,
     command: list[str] | None = None,
 ) -> int:
-    proc = start_pcm(pcm_bin, interval, csv_path, log_path)
+    proc = start_pcm(pcm_bin, interval, csv_path, log_path, sudo_pcm)
     try:
         # Give PCM a moment to initialize counters before the measured workload starts.
         time.sleep(min(0.2, interval))
@@ -268,6 +283,7 @@ def main() -> None:
         interval=args.sample_interval,
         csv_path=idle_csv,
         log_path=idle_log,
+        sudo_pcm=args.sudo_pcm,
         seconds=args.idle_seconds,
     )
     idle_w, idle_joules_per_sample, idle_samples = summarize_power(idle_csv, args.sample_interval)
@@ -278,6 +294,7 @@ def main() -> None:
         interval=args.sample_interval,
         csv_path=workload_csv,
         log_path=workload_log,
+        sudo_pcm=args.sudo_pcm,
         command=args.command,
     )
     if returncode != 0 and not workload_csv.exists():
@@ -293,6 +310,7 @@ def main() -> None:
     summary = (
         f"platform={PLATFORM_DESCRIPTION}\n"
         f"pcm_bin={pcm_bin}\n"
+        f"sudo_pcm={args.sudo_pcm}\n"
         f"sample_interval_s={args.sample_interval:.6f}\n"
         f"idle_power_w={idle_w:.6f}\n"
         f"workload_power_w={workload_w:.6f}\n"

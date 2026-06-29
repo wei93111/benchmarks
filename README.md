@@ -87,9 +87,11 @@ This runs GPU speed, CPU speed, GPU power, and CPU power for the full default
 benchmarks/run_all.sh
 ```
 
-CPU power uses Intel PCM CSV output and may require `sudo` for MSR access. The
-helper searches `$PCM_BIN`, `./bin/pcm`, local `bin/pcm` paths, then `pcm` on
-`PATH`. If PCM access is already configured for the current user, use:
+CPU power uses Intel PCM CSV output and may require `sudo` for MSR access. Only
+the PCM process is run through `sudo`; the Python workload stays in the current
+user environment. The helper searches `$PCM_BIN`, `./bin/pcm`, local `bin/pcm`
+paths, then `pcm` on `PATH`. If PCM access is already configured for the current
+user, use:
 
 ```bash
 benchmarks/run_all.sh --no-sudo
@@ -194,7 +196,8 @@ Run CPU power for all default configs:
 benchmarks/run_all.sh --cpu-power-only
 ```
 
-If PCM requires root/MSR access, keep the default `sudo` behavior. If not:
+If PCM requires root/MSR access, keep the default behavior, which uses `sudo`
+for PCM only. If not:
 
 ```bash
 benchmarks/run_all.sh --cpu-power-only --no-sudo
