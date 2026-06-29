@@ -108,7 +108,12 @@ def prepare_output_file(path: Path, sudo_cleanup: bool) -> None:
 
 
 def prepare_output_dir(path: Path, sudo_cleanup: bool) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        if not sudo_cleanup:
+            raise
+        subprocess.run(["sudo", "mkdir", "-p", str(path)], check=True)
     if os.access(path, os.W_OK):
         return
     if not sudo_cleanup:
@@ -302,7 +307,7 @@ def summarize_power(csv_path: Path, interval: float) -> tuple[float, float, int]
 def main() -> None:
     args = parse_args()
     pcm_bin = resolve_pcm_bin(args.pcm_bin)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    prepare_output_dir(args.out.parent, args.sudo_pcm)
 
     idle_csv = args.out.with_name("idle_pcm.csv")
     workload_csv = args.out.with_name("workload_pcm.csv")
@@ -360,6 +365,7 @@ def main() -> None:
         f"returncode={returncode}\n"
     )
     print(summary, end="")
+    prepare_output_file(args.out, args.sudo_pcm)
     args.out.write_text(summary)
     sys.exit(returncode)
 
