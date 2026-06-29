@@ -94,6 +94,32 @@ def to_float(value: str) -> float | None:
         return None
 
 
+def prepare_output_file(path: Path, sudo_cleanup: bool) -> None:
+    if not path.exists():
+        return
+    try:
+        path.unlink()
+    except PermissionError as exc:
+        if not sudo_cleanup:
+            raise
+        subprocess.run(["sudo", "rm", "-f", str(path)], check=True)
+        if path.exists():
+            raise PermissionError(f"could not remove root-owned output file: {path}") from exc
+
+
+def prepare_output_dir(path: Path, sudo_cleanup: bool) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if os.access(path, os.W_OK):
+        return
+    if not sudo_cleanup:
+        raise PermissionError(f"output directory is not writable: {path}")
+    uid = os.getuid()
+    gid = os.getgid()
+    subprocess.run(["sudo", "chown", "-R", f"{uid}:{gid}", str(path)], check=True)
+    if not os.access(path, os.W_OK):
+        raise PermissionError(f"output directory is still not writable after chown: {path}")
+
+
 def start_pcm(
     pcm_bin: Path,
     interval: float,
@@ -101,31 +127,38 @@ def start_pcm(
     log_path: Path,
     sudo_pcm: bool,
 ) -> subprocess.Popen:
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    prepare_output_dir(csv_path.parent, sudo_pcm)
+    prepare_output_file(csv_path, sudo_pcm)
+    prepare_output_file(log_path, sudo_pcm)
+    csv_fh = csv_path.open("w")
     log_fh = log_path.open("w")
-    command = [str(pcm_bin), str(interval), f"-csv={csv_path}"]
+    command = [str(pcm_bin), str(interval), "-csv"]
     if sudo_pcm:
         command = ["sudo", "-E", *command]
-    return subprocess.Popen(
-        command,
-        stdout=log_fh,
-        stderr=subprocess.STDOUT,
-    )
+    proc = subprocess.Popen(command, stdout=csv_fh, stderr=log_fh)
+    proc._qt_bench_output_files = (csv_fh, log_fh)  # type: ignore[attr-defined]
+    return proc
 
 
 def stop_pcm(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
-    proc.send_signal(signal.SIGINT)
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+    finally:
+        for fh in getattr(proc, "_qt_bench_output_files", ()):
+            try:
+                fh.close()
+            except OSError:
+                pass
 
 
 def run_pcm_window(
