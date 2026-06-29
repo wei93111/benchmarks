@@ -33,7 +33,7 @@ Options:
   --cpu-speed-only   Run CPU latency only
   --gpu-power-only   Run GPU power only
   --cpu-power-only   Run CPU power only
-  --no-sudo          Do not use sudo for CPU RAPL power
+  --no-sudo          Do not use sudo for CPU PCM power
 
 EOF
 }
@@ -145,7 +145,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
         echo "[run-all] CPU power n=$n k=$k"
         CPU_POWER_CMD=(
           python3 "$SCRIPT_DIR/cpu_power.py"
-          --out "$SCRIPT_DIR/results/power/cpu_n${n}_k${k}/rapl_power_summary.txt"
+          --out "$SCRIPT_DIR/results/power/cpu_n${n}_k${k}/cpu_pcm_power_summary.txt"
           --
           python3 -c "from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
         )

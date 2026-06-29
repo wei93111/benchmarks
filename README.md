@@ -87,8 +87,9 @@ This runs GPU speed, CPU speed, GPU power, and CPU power for the full default
 benchmarks/run_all.sh
 ```
 
-CPU power uses RAPL and may require `sudo`. If RAPL permissions are already
-configured, use:
+CPU power uses Intel PCM CSV output and may require `sudo` for MSR access. The
+helper searches `$PCM_BIN`, `./bin/pcm`, local `bin/pcm` paths, then `pcm` on
+`PATH`. If PCM access is already configured for the current user, use:
 
 ```bash
 benchmarks/run_all.sh --no-sudo
@@ -105,7 +106,7 @@ benchmarks/run_all.sh --gpu-only
 benchmarks/run_all.sh --cpu-only
 ```
 
-Use `--gpu-power-only` when CPU RAPL permissions are unavailable and you only
+Use `--gpu-power-only` when CPU PCM permissions are unavailable and you only
 want GPU dynamic power.
 
 ## 1. GPU Speed
@@ -181,7 +182,9 @@ Power method:
 - sample idle GPU power for 10 seconds with `nvidia-smi`
 - run sustained attention workload for 45 seconds
 - sample workload GPU power with `nvidia-smi --loop-ms=100`
-- dynamic power = workload power - idle power
+- idle power = average over the settled tail half of the idle samples
+- workload power = average over the middle 70% of workload samples
+- dynamic power = steady workload power - settled idle power
 
 ## 4. CPU Power / Energy Inputs
 
@@ -191,7 +194,7 @@ Run CPU power for all default configs:
 benchmarks/run_all.sh --cpu-power-only
 ```
 
-If RAPL requires root, keep the default `sudo` behavior. If not:
+If PCM requires root/MSR access, keep the default `sudo` behavior. If not:
 
 ```bash
 benchmarks/run_all.sh --cpu-power-only --no-sudo
@@ -200,14 +203,25 @@ benchmarks/run_all.sh --cpu-power-only --no-sudo
 Output per config:
 
 ```text
-benchmarks/results/power/cpu_n<N>_k<K>/rapl_power_summary.txt
+benchmarks/results/power/cpu_n<N>_k<K>/cpu_pcm_power_summary.txt
 ```
+
+CPU measurement platform:
+
+- AWS c6i.metal bare metal, no hypervisor
+- Intel Xeon Platinum 8375C, Ice Lake-SP
+- 2 physical sockets, 32 cores per socket, 64 physical cores total
+- 128 logical cores with 2-way hyperthreading
+- 2.90 GHz base frequency
+- expected idle CPU package power is roughly 190-200 W total across both sockets
 
 Power method:
 
-- sample idle CPU package energy for 10 seconds with RAPL
+- sample idle CPU package energy for 10 seconds with Intel PCM CSV output
 - run sustained CPU attention workload for 45 seconds with default threading
-- compute workload package power from RAPL energy delta
+- read per-socket `CPU energy` / `Proc Energy (Joules)` from PCM
+- sum socket 0 + socket 1 package energy for total CPU package power
+- divide Joules per sample by the 0.5 second PCM sampling interval to get Watts
 - dynamic power = workload power - idle power
 
 ## Energy Calculation
@@ -238,7 +252,7 @@ Power:
 
 ```text
 benchmarks/results/power/gpu_n<N>_k<K>/gpu_power_summary.txt
-benchmarks/results/power/cpu_n<N>_k<K>/rapl_power_summary.txt
+benchmarks/results/power/cpu_n<N>_k<K>/cpu_pcm_power_summary.txt
 ```
 
 ## Notes for Rental Machines
