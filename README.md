@@ -181,12 +181,13 @@ benchmarks/results/power/gpu_n<N>_k<K>/gpu_power_summary.txt
 
 Power method:
 
-- sample idle GPU power for 10 seconds with `nvidia-smi`
+- sample idle GPU power for 60 seconds with `nvidia-smi`
 - run sustained attention workload for 45 seconds
 - sample workload GPU power with `nvidia-smi --loop-ms=100`
-- idle power = average over the settled tail half of the idle samples
-- workload power = average over the middle 70% of workload samples
-- dynamic power = steady workload power - settled idle power
+- idle power = 15% trimmed mean over the settled tail half of idle samples
+- workload power = 15% trimmed mean over the middle 70% of workload samples
+- also record full window mean, median, min/max, and kept sample counts for audit
+- dynamic power = trimmed steady workload power - trimmed settled idle power
 
 ## 4. CPU Power / Energy Inputs
 
