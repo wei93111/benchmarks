@@ -6,13 +6,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from qt_bench import CPU_THREADS, ITERS, K_VALUES, N_VALUES, RESULTS_DIR, WARMUP, run_latency_sweep
+from qt_bench import CPU_THREADS, HEAD_DIM, HEADS, ITERS, K_VALUES, N_VALUES, RESULTS_DIR, WARMUP, run_latency_sweep
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, nargs="+", default=list(N_VALUES))
     parser.add_argument("--k", type=int, nargs="+", default=list(K_VALUES))
+    parser.add_argument("--heads", type=int, default=HEADS)
+    parser.add_argument("--head-dim", type=int, default=HEAD_DIM)
     parser.add_argument("--threads", type=int, default=CPU_THREADS)
     parser.add_argument("--warmup", type=int, default=WARMUP)
     parser.add_argument("--iters", type=int, default=ITERS)
@@ -28,6 +30,8 @@ def main() -> None:
         k_values=args.k,
         out=args.out,
         threads=args.threads,
+        heads=args.heads,
+        head_dim=args.head_dim,
         warmup=args.warmup,
         iters=args.iters,
     )

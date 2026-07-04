@@ -111,6 +111,16 @@ benchmarks/run_all.sh --cpu-only
 Use `--gpu-power-only` when CPU PCM permissions are unavailable and you only
 want GPU dynamic power.
 
+Run a separate H100 GPU-only sweep with 8 attention heads:
+
+```bash
+benchmarks/run_all.sh \
+  --gpu-only \
+  --heads 8 \
+  --head-dim 64 \
+  --out-root benchmarks/results/H100_results_heads8
+```
+
 ## 1. GPU Speed
 
 Run the full GPU latency sweep:

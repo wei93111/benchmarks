@@ -13,6 +13,7 @@ HEAD_DIM=64
 WARMUP=100
 ITERS=1000
 POWER_LOOP_SECONDS=45
+OUT_ROOT="$SCRIPT_DIR/results"
 
 usage() {
   cat <<EOF
@@ -25,6 +26,9 @@ Runs the default QuadTree attention benchmark sweep:
   levels=$LEVELS heads=$HEADS head_dim=$HEAD_DIM warmup=$WARMUP iters=$ITERS
 
 Options:
+  --heads N          Number of attention heads (default: $HEADS)
+  --head-dim N       Per-head dimension (default: $HEAD_DIM)
+  --out-root DIR     Output root directory (default: benchmarks/results)
   --speed-only       Run GPU+CPU latency only
   --power-only       Run GPU+CPU power only
   --gpu-only         Run GPU latency+power only
@@ -46,6 +50,18 @@ USE_SUDO=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --heads)
+      HEADS="$2"
+      shift 2
+      ;;
+    --head-dim)
+      HEAD_DIM="$2"
+      shift 2
+      ;;
+    --out-root)
+      OUT_ROOT="$2"
+      shift 2
+      ;;
     --speed-only)
       RUN_POWER=0
       shift
@@ -107,7 +123,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$REPO_ROOT"
-mkdir -p "$SCRIPT_DIR/results"
+mkdir -p "$OUT_ROOT"
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 
 if [[ "$RUN_SPEED" -eq 1 && "$RUN_GPU" -eq 1 ]]; then
@@ -115,9 +131,11 @@ if [[ "$RUN_SPEED" -eq 1 && "$RUN_GPU" -eq 1 ]]; then
   python3 "$SCRIPT_DIR/gpu_speed.py" \
     --n "${N_VALUES[@]}" \
     --k "${K_VALUES[@]}" \
+    --heads "$HEADS" \
+    --head-dim "$HEAD_DIM" \
     --warmup "$WARMUP" \
     --iters "$ITERS" \
-    --out "$SCRIPT_DIR/results/gpu_latency.csv"
+    --out "$OUT_ROOT/gpu_latency.csv"
 fi
 
 if [[ "$RUN_SPEED" -eq 1 && "$RUN_CPU" -eq 1 ]]; then
@@ -125,9 +143,11 @@ if [[ "$RUN_SPEED" -eq 1 && "$RUN_CPU" -eq 1 ]]; then
   python3 "$SCRIPT_DIR/cpu_speed.py" \
     --n "${N_VALUES[@]}" \
     --k "${K_VALUES[@]}" \
+    --heads "$HEADS" \
+    --head-dim "$HEAD_DIM" \
     --warmup "$WARMUP" \
     --iters "$ITERS" \
-    --out "$SCRIPT_DIR/results/cpu_latency.csv"
+    --out "$OUT_ROOT/cpu_latency.csv"
 fi
 
 if [[ "$RUN_POWER" -eq 1 ]]; then
@@ -136,23 +156,23 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
       if [[ "$RUN_GPU" -eq 1 ]]; then
         echo "[run-all] GPU power n=$n k=$k"
         "$SCRIPT_DIR/gpu_power.sh" \
-          --out-dir "$SCRIPT_DIR/results/power/gpu_n${n}_k${k}" \
+          --out-dir "$OUT_ROOT/power/gpu_n${n}_k${k}" \
           -- \
-          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
+          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, seconds=POWER_LOOP_SECONDS)"
       fi
 
       if [[ "$RUN_CPU" -eq 1 ]]; then
         echo "[run-all] CPU power n=$n k=$k"
         CPU_POWER_CMD=(
           python3 "$SCRIPT_DIR/cpu_power.py"
-          --out "$SCRIPT_DIR/results/power/cpu_n${n}_k${k}/cpu_pcm_power_summary.txt"
+          --out "$OUT_ROOT/power/cpu_n${n}_k${k}/cpu_pcm_power_summary.txt"
         )
         if [[ "$USE_SUDO" -eq 1 ]]; then
           CPU_POWER_CMD+=(--sudo-pcm)
         fi
         CPU_POWER_CMD+=(
           --
-          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, seconds=POWER_LOOP_SECONDS)"
+          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, seconds=POWER_LOOP_SECONDS)"
         )
         "${CPU_POWER_CMD[@]}"
       fi

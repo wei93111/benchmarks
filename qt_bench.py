@@ -472,6 +472,8 @@ def run_latency_sweep(
     k_values: Iterable[int],
     out: Path,
     threads: int | None = None,
+    heads: int = HEADS,
+    head_dim: int = HEAD_DIM,
     warmup: int = WARMUP,
     iters: int = ITERS,
 ) -> None:
@@ -483,7 +485,13 @@ def run_latency_sweep(
 
     for n in n_values:
         for k in k_values:
-            config, attn, queries, keys, values = build_case(backend=backend, n=n, k=k)
+            config, attn, queries, keys, values = build_case(
+                backend=backend,
+                n=n,
+                k=k,
+                heads=heads,
+                head_dim=head_dim,
+            )
             run_once = make_workload(attn, queries, keys, values, get_device(backend))
             result = measure_latency(config=config, run_once=run_once, warmup=warmup, iters=iters)
             print_result(result)
@@ -497,11 +505,22 @@ def run_single_power_loop(
     k: int,
     seconds: float = POWER_LOOP_SECONDS,
     threads: int | None = None,
+    heads: int = HEADS,
+    head_dim: int = HEAD_DIM,
 ) -> None:
     if threads is not None:
         torch.set_num_threads(threads)
         torch.set_num_interop_threads(max(1, min(threads, 4)))
-    config, attn, queries, keys, values = build_case(backend=backend, n=n, k=k)
+    config, attn, queries, keys, values = build_case(
+        backend=backend,
+        n=n,
+        k=k,
+        heads=heads,
+        head_dim=head_dim,
+    )
     run_once = make_workload(attn, queries, keys, values, get_device(backend))
     iterations = run_power_loop(run_once, seconds, backend)
-    print(f"POWER_LOOP backend={backend} n={n} k={k} seconds={seconds:.1f} iterations={iterations}")
+    print(
+        f"POWER_LOOP backend={backend} n={n} k={k} heads={heads} "
+        f"head_dim={head_dim} seconds={seconds:.1f} iterations={iterations}"
+    )
