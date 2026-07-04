@@ -65,7 +65,8 @@ cd ../..
 Or:
 
 ```bash
-benchmarks/kernel/build.sh
+cd benchmarks/kernel
+./build.sh
 ```
 
 Verify the modules import:
@@ -84,7 +85,8 @@ This runs GPU speed, CPU speed, GPU power, and CPU power for the full default
 `(n, k)` sweep:
 
 ```bash
-benchmarks/run_all.sh
+cd benchmarks
+./run_all.sh
 ```
 
 CPU power uses Intel PCM CSV output and may require `sudo` for MSR access. Only
