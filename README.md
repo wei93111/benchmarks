@@ -28,6 +28,10 @@ score_computation_cuda
 value_aggregation_cuda
 ```
 
+An additional fused Triton GPU baseline is available in `kernel_triton/`. It
+keeps the original CUDA path unchanged and can be selected with
+`gpu_speed.py --backend triton`.
+
 The CPU path uses PyTorch fallback implementations of the same score and value
 aggregation operations.
 
@@ -79,6 +83,21 @@ print("CUDA extensions OK")
 PY
 ```
 
+## Set Up the Triton Baseline
+
+```bash
+cd benchmarks
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+python3 -m pip install einops
+./kernel_triton/build.sh
+```
+
+The PyTorch wheel installs its compatible Triton dependency. No CUDA extension
+build is needed for this backend; Triton compiles during benchmark warmup.
+
 ## Run All Evaluations
 
 This runs GPU speed, CPU speed, GPU power, and CPU power for the full default
@@ -122,6 +141,24 @@ benchmarks/run_all.sh \
   --head-dim 64 \
   --out-root benchmarks/results/H100_results_heads8
 ```
+
+Run the separate Triton latency, power, and dynamic-energy sweep:
+
+```bash
+cd benchmarks
+./run_all_triton.sh \
+  --heads 1 \
+  --out-root "$PWD/results/H100_triton_results_heads1"
+
+./run_all_triton.sh \
+  --heads 8 \
+  --out-root "$PWD/results/H100_triton_results_heads8"
+```
+
+Triton results default to
+`benchmarks/results/triton_results_heads<HEADS>/`. In addition to matching
+latency and power outputs, this writes `gpu_energy.csv` with
+`dynamic_energy_mj = dynamic_power_w * latency_ms`.
 
 ## 1. GPU Speed
 

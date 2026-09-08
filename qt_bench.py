@@ -124,6 +124,39 @@ def value_aggregation_cuda_op(score: torch.Tensor, value: torch.Tensor, index: t
     return rearrange(output, "b (n f) h d -> b n f h d", f=quad_f)
 
 
+def coarse_attention_triton_op(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    topk: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    try:
+        from kernel_triton import coarse_attention
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Missing Triton kernel dependencies. Check the environment with:\n"
+            "  benchmarks/kernel_triton/build.sh"
+        ) from exc
+    return coarse_attention(query, key, value, topk)
+
+
+def fine_attention_triton_op(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    previous_topk_idx: torch.Tensor,
+    topk: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    try:
+        from kernel_triton import fine_attention
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Missing Triton kernel dependencies. Check the environment with:\n"
+            "  benchmarks/kernel_triton/build.sh"
+        ) from exc
+    return fine_attention(query, key, value, previous_topk_idx, topk)
+
+
 score_computation_op = score_computation_torch
 value_aggregation_op = value_aggregation_torch
 
@@ -131,7 +164,17 @@ value_aggregation_op = value_aggregation_torch
 class QTAttB(nn.Module):
     """Local copy of the reference QuadTree Attention-B attention core."""
 
-    def __init__(self, nhead, dim, scale, topks=(32, 32, 32, 32), use_dropout=False, attention_dropout=0.1, lepe=False):
+    def __init__(
+        self,
+        nhead,
+        dim,
+        scale,
+        topks=(32, 32, 32, 32),
+        use_dropout=False,
+        attention_dropout=0.1,
+        lepe=False,
+        backend="torch_cpu",
+    ):
         super().__init__()
         del attention_dropout
         self.use_dropout = use_dropout
@@ -139,6 +182,7 @@ class QTAttB(nn.Module):
         self.nhead = nhead
         self.dim = dim
         self.lepe = lepe
+        self.backend = backend
         if lepe:
             self.get_vs = nn.ModuleList(
                 [
@@ -149,6 +193,10 @@ class QTAttB(nn.Module):
         self.register_parameter("weight", nn.Parameter(torch.randn(scale)))
 
     def process_coarse_level(self, query, key, value, topk):
+        if self.backend == "triton":
+            message, topk_idx = coarse_attention_triton_op(query, key, value, topk)
+            return None, message, None, topk_idx
+
         batch, channels, height, width = key.shape
         del height, width
         cur_dim = channels // self.nhead
@@ -199,11 +247,22 @@ class QTAttB(nn.Module):
         )
         return probs, message, topk_score, topk_idx
 
+    def process_fine_level_triton(self, query, key, value, previous_topk_idx, topk):
+        message, topk_idx = fine_attention_triton_op(
+            query,
+            key,
+            value,
+            previous_topk_idx,
+            topk,
+        )
+        return None, message, None, topk_idx
+
     def forward(self, queries, keys, values, q_mask=None, kv_mask=None):
         del q_mask, kv_mask
         messages = []
         topk = self.topks[0]
         topk_pos = None
+        previous_topk_idx = None
 
         for i, (query, key, value) in enumerate(zip(reversed(queries), reversed(keys), reversed(values))):
             if i == 0:
@@ -212,12 +271,24 @@ class QTAttB(nn.Module):
                 topk_prev = topk
                 topk = self.topks[i]
                 final = i == len(queries) - 1
-                _, message, topk_score, topk_idx = self.process_fine_level(
-                    query, key, value, topk_score, topk_pos, topk_prev, topk, final
-                )
+                if self.backend == "triton":
+                    _, message, topk_score, topk_idx = self.process_fine_level_triton(
+                        query,
+                        key,
+                        value,
+                        previous_topk_idx,
+                        topk,
+                    )
+                else:
+                    _, message, topk_score, topk_idx = self.process_fine_level(
+                        query, key, value, topk_score, topk_pos, topk_prev, topk, final
+                    )
             messages.append(message)
-            _, _, height, width = key.shape
-            topk_pos = torch.stack([topk_idx // width, topk_idx % width])
+            if self.backend == "triton":
+                previous_topk_idx = topk_idx
+            else:
+                _, _, height, width = key.shape
+                topk_pos = torch.stack([topk_idx // width, topk_idx % width])
 
         weight = torch.softmax(self.weight, dim=0)
         final_message = 0
@@ -262,8 +333,12 @@ def configure_backend_ops(backend: str) -> None:
         value_aggregation_op = value_aggregation_torch
 
 
+def is_cuda_backend(backend: str) -> bool:
+    return backend in {"cuda_ref", "triton"}
+
+
 def get_device(backend: str) -> torch.device:
-    if backend == "cuda_ref":
+    if is_cuda_backend(backend):
         if not torch.cuda.is_available():
             raise SystemExit("CUDA backend requested but torch.cuda.is_available() is false.")
         return torch.device("cuda")
@@ -272,8 +347,8 @@ def get_device(backend: str) -> torch.device:
 
 def get_dtype(name: str, device: torch.device, backend: str) -> torch.dtype:
     if name == "float16":
-        if backend == "cuda_ref":
-            raise SystemExit("cuda_ref uses the original extension, which supports float32/double but not float16.")
+        if backend in {"cuda_ref", "triton"}:
+            raise SystemExit(f"{backend} currently supports float32 benchmarking only.")
         if device.type != "cuda":
             raise SystemExit("float16 benchmarking is only supported on CUDA.")
         return torch.float16
@@ -325,6 +400,8 @@ def build_case(
     lepe: bool = LEPE,
     seed: int = 0,
 ):
+    if backend not in {"cuda_ref", "triton", "torch_cpu"}:
+        raise ValueError(f"Unknown backend {backend!r}.")
     device = get_device(backend)
     dtype = get_dtype(dtype_name, device, backend)
     side = validate_shape(n, k, levels)
@@ -335,7 +412,14 @@ def build_case(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
 
-    attn = QTAttB(nhead=heads, dim=head_dim, scale=levels, topks=[k] * levels, lepe=lepe)
+    attn = QTAttB(
+        nhead=heads,
+        dim=head_dim,
+        scale=levels,
+        topks=[k] * levels,
+        lepe=lepe,
+        backend=backend,
+    )
     attn = attn.to(device=device, dtype=dtype)
     attn.eval()
 
@@ -392,7 +476,7 @@ def measure_latency(
     iters: int = ITERS,
     trim_fraction: float = TRIM,
 ) -> LatencyResult:
-    device_type = "cuda" if config.backend == "cuda_ref" else "cpu"
+    device_type = "cuda" if is_cuda_backend(config.backend) else "cpu"
     for _ in range(warmup):
         run_once()
     if device_type == "cuda":
@@ -439,7 +523,7 @@ def run_power_loop(run_once: Callable[[], torch.Tensor], seconds: float, backend
     while time.perf_counter() < deadline:
         run_once()
         iterations += 1
-    if backend == "cuda_ref":
+    if is_cuda_backend(backend):
         torch.cuda.synchronize()
     return iterations
 
@@ -480,7 +564,7 @@ def run_latency_sweep(
     if threads is not None:
         torch.set_num_threads(threads)
         torch.set_num_interop_threads(max(1, min(threads, 4)))
-    if backend == "cuda_ref":
+    if is_cuda_backend(backend):
         torch.backends.cudnn.benchmark = False
 
     for n in n_values:
