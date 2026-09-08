@@ -128,6 +128,7 @@ export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 
 if [[ "$RUN_SPEED" -eq 1 && "$RUN_GPU" -eq 1 ]]; then
   echo "[run-all] GPU latency sweep"
+  rm -f "$OUT_ROOT/gpu_latency.csv"
   python3 "$SCRIPT_DIR/gpu_speed.py" \
     --n "${N_VALUES[@]}" \
     --k "${K_VALUES[@]}" \
@@ -140,6 +141,7 @@ fi
 
 if [[ "$RUN_SPEED" -eq 1 && "$RUN_CPU" -eq 1 ]]; then
   echo "[run-all] CPU latency sweep"
+  rm -f "$OUT_ROOT/cpu_latency.csv"
   python3 "$SCRIPT_DIR/cpu_speed.py" \
     --n "${N_VALUES[@]}" \
     --k "${K_VALUES[@]}" \

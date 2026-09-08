@@ -26,6 +26,8 @@ HEAD_DIM = 64
 WARMUP = 100
 ITERS = 1000
 TRIM = 0.15
+CUDA_TIMING_BATCH_SIZE = 10
+CUDA_UNBATCHED_N = 65536
 CPU_THREADS = None
 POWER_LOOP_SECONDS = 45.0
 LEPE = True
@@ -61,6 +63,8 @@ class LatencyResult:
     lepe: bool
     warmup: int
     iters: int
+    timing_batch_size: int
+    timed_batches: int
     trim_fraction: float
     latency_ms_mean: float
     latency_ms_median: float
@@ -476,6 +480,8 @@ def measure_latency(
     iters: int = ITERS,
     trim_fraction: float = TRIM,
 ) -> LatencyResult:
+    if iters <= 0:
+        raise SystemExit("--iters must be positive.")
     device_type = "cuda" if is_cuda_backend(config.backend) else "cpu"
     for _ in range(warmup):
         run_once()
@@ -486,13 +492,24 @@ def measure_latency(
     if device_type == "cuda":
         starter = torch.cuda.Event(enable_timing=True)
         ender = torch.cuda.Event(enable_timing=True)
-        for _ in range(iters):
+        timing_batch_size = (
+            1
+            if config.n == CUDA_UNBATCHED_N
+            else min(CUDA_TIMING_BATCH_SIZE, iters)
+        )
+        complete_batches, remainder = divmod(iters, timing_batch_size)
+        batch_sizes = [timing_batch_size] * complete_batches
+        if remainder:
+            batch_sizes.append(remainder)
+        for batch_size in batch_sizes:
             starter.record()
-            run_once()
+            for _ in range(batch_size):
+                run_once()
             ender.record()
-            torch.cuda.synchronize()
-            samples.append(float(starter.elapsed_time(ender)))
+            ender.synchronize()
+            samples.append(float(starter.elapsed_time(ender)) / batch_size)
     else:
+        timing_batch_size = 1
         for _ in range(iters):
             t0 = time.perf_counter()
             run_once()
@@ -508,6 +525,8 @@ def measure_latency(
         **asdict(config),
         warmup=warmup,
         iters=iters,
+        timing_batch_size=timing_batch_size,
+        timed_batches=len(samples),
         trim_fraction=trim_fraction,
         latency_ms_mean=sum(kept) / len(kept),
         latency_ms_median=median,
@@ -531,9 +550,17 @@ def run_power_loop(run_once: Callable[[], torch.Tensor], seconds: float, backend
 def append_csv(path: Path, result: LatencyResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     row = asdict(result)
+    fieldnames = list(row.keys())
     write_header = not path.exists()
+    if not write_header:
+        with path.open(newline="") as fh:
+            existing_header = next(csv.reader(fh), [])
+        if existing_header != fieldnames:
+            raise SystemExit(
+                f"{path} uses an incompatible CSV schema; remove it and rerun."
+            )
     with path.open("a", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
         if write_header:
             writer.writeheader()
         writer.writerow(row)
@@ -545,7 +572,8 @@ def print_result(result: LatencyResult) -> None:
         f"backend={result.backend} n={result.n} k={result.k} levels={result.levels} "
         f"heads={result.heads} head_dim={result.head_dim} dtype={result.dtype} "
         f"mean_ms={result.latency_ms_mean:.6f} median_ms={result.latency_ms_median:.6f} "
-        f"kept={result.samples_kept}/{result.iters}"
+        f"batch_size={result.timing_batch_size} "
+        f"kept_batches={result.samples_kept}/{result.timed_batches}"
     )
 
 

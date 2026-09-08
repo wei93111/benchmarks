@@ -178,9 +178,17 @@ Timing method:
 
 - `torch.cuda.Event`
 - 100 warmup iterations
-- 1000 timed iterations
-- discard lowest/highest 15%
+- 1000 total timed attention invocations
+- for `n < 65536`, time 10 consecutive invocations per event pair and divide
+  elapsed time by 10
+- for `n = 65536`, time one invocation per event pair
+- discard the lowest/highest 15% of per-invocation batch averages
 - report trimmed mean latency in ms
+
+Batching short GPU invocations avoids a host synchronization gap after every
+sub-millisecond operation and produces steadier boosted-clock measurements.
+Because this measures steady-state latency, CUDA and Triton comparisons must
+both be collected with this same timing implementation.
 
 ## 2. CPU Speed
 
