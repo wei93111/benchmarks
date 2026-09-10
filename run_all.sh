@@ -10,6 +10,7 @@ K_VALUES=(4 8 16)
 LEVELS=4
 HEADS=1
 HEAD_DIM=64
+BATCH=1
 WARMUP=100
 ITERS=1000
 POWER_LOOP_SECONDS=45
@@ -23,10 +24,11 @@ Usage:
 Runs the default QuadTree attention benchmark sweep:
   n = ${N_VALUES[*]}
   k = ${K_VALUES[*]}
-  levels=$LEVELS heads=$HEADS head_dim=$HEAD_DIM warmup=$WARMUP iters=$ITERS
+  levels=$LEVELS heads=$HEADS batch=$BATCH head_dim=$HEAD_DIM warmup=$WARMUP iters=$ITERS
 
 Options:
   --heads N          Number of attention heads (default: $HEADS)
+  --batch N          Input batch size (default: $BATCH)
   --head-dim N       Per-head dimension (default: $HEAD_DIM)
   --out-root DIR     Output root directory (default: benchmarks/results)
   --speed-only       Run GPU+CPU latency only
@@ -52,6 +54,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --heads)
       HEADS="$2"
+      shift 2
+      ;;
+    --batch)
+      BATCH="$2"
       shift 2
       ;;
     --head-dim)
@@ -134,6 +140,7 @@ if [[ "$RUN_SPEED" -eq 1 && "$RUN_GPU" -eq 1 ]]; then
     --k "${K_VALUES[@]}" \
     --heads "$HEADS" \
     --head-dim "$HEAD_DIM" \
+    --batch "$BATCH" \
     --warmup "$WARMUP" \
     --iters "$ITERS" \
     --out "$OUT_ROOT/gpu_latency.csv"
@@ -147,6 +154,7 @@ if [[ "$RUN_SPEED" -eq 1 && "$RUN_CPU" -eq 1 ]]; then
     --k "${K_VALUES[@]}" \
     --heads "$HEADS" \
     --head-dim "$HEAD_DIM" \
+    --batch "$BATCH" \
     --warmup "$WARMUP" \
     --iters "$ITERS" \
     --out "$OUT_ROOT/cpu_latency.csv"
@@ -160,7 +168,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
         "$SCRIPT_DIR/gpu_power.sh" \
           --out-dir "$OUT_ROOT/power/gpu_n${n}_k${k}" \
           -- \
-          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, seconds=POWER_LOOP_SECONDS)"
+          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='cuda_ref', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, batch=$BATCH, seconds=POWER_LOOP_SECONDS)"
       fi
 
       if [[ "$RUN_CPU" -eq 1 ]]; then
@@ -174,7 +182,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
         fi
         CPU_POWER_CMD+=(
           --
-          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, seconds=POWER_LOOP_SECONDS)"
+          python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='torch_cpu', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, batch=$BATCH, seconds=POWER_LOOP_SECONDS)"
         )
         "${CPU_POWER_CMD[@]}"
       fi

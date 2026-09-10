@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from qt_bench import CPU_THREADS, HEAD_DIM, HEADS, ITERS, K_VALUES, N_VALUES, RESULTS_DIR, WARMUP, run_latency_sweep
+from qt_bench import CPU_THREADS, HEAD_DIM, HEADS, ITERS, K_VALUES, N_VALUES, RESULTS_DIR, TRIM, WARMUP, run_latency_sweep
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threads", type=int, default=CPU_THREADS)
     parser.add_argument("--warmup", type=int, default=WARMUP)
     parser.add_argument("--iters", type=int, default=ITERS)
+    parser.add_argument("--trim", type=float, default=TRIM, help="Symmetric outlier trim fraction")
     parser.add_argument("--out", type=Path, default=RESULTS_DIR / "cpu_latency.csv")
     return parser.parse_args()
 
@@ -36,6 +37,7 @@ def main() -> None:
         batch=args.batch,
         warmup=args.warmup,
         iters=args.iters,
+        trim_fraction=args.trim,
     )
 
 

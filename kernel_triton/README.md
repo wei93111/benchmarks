@@ -53,7 +53,7 @@ during benchmark warmup.
 
 ```bash
 python3 gpu_speed.py \
-  --backend triton --n 1024 --k 4 --heads 1 --warmup 10 --iters 100
+  --backend triton --n 1024 --k 4 --heads 1 --batch 1 --warmup 10 --iters 100
 ```
 
 GPU latency timing batches 10 invocations per CUDA event pair for
@@ -65,12 +65,22 @@ milliseconds per invocation.
 ```bash
 ./run_all_triton.sh \
   --heads 1 \
+  --batch 1 \
   --out-root "$PWD/results/H100_triton_results_heads1"
 
 ./run_all_triton.sh \
   --heads 8 \
+  --batch 1 \
   --out-root "$PWD/results/H100_triton_results_heads8"
+
+./run_all_triton.sh \
+  --heads 1 \
+  --batch 256 \
+  --latency-only \
+  --out-root "$PWD/results/H100_triton_results_heads1_batch256"
 ```
+
+`gpu_speed.py` and `run_all_triton.sh` sweep the usual `(n, K)` grid at a fixed `--heads` and `--batch`. Latency uses 100 warmup steps, 1000 timed iterations, and 15% symmetric outlier trim by default.
 
 Each run produces:
 

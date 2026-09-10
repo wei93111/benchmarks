@@ -42,6 +42,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--heads", type=int, required=True)
     parser.add_argument("--head-dim", type=int, required=True)
+    parser.add_argument("--batch", type=int, default=1)
     args = parser.parse_args()
 
     latency_rows = read_latency(args.root / "gpu_latency.csv")
@@ -76,6 +77,7 @@ def main() -> None:
                 "levels": 4,
                 "heads": args.heads,
                 "head_dim": args.head_dim,
+                "batch": args.batch,
                 "device": device,
                 "idle_power_w": f"{idle:.4f}",
                 "workload_power_w": f"{workload:.4f}",
@@ -92,6 +94,7 @@ def main() -> None:
                     "k": k,
                     "heads": args.heads,
                     "head_dim": args.head_dim,
+                    "batch": args.batch,
                     "latency_ms": f"{latency_ms:.6f}",
                     "dynamic_power_w": f"{dynamic:.4f}",
                     "dynamic_energy_mj": f"{dynamic * latency_ms:.6f}",
@@ -108,6 +111,7 @@ def main() -> None:
                 "levels",
                 "heads",
                 "head_dim",
+                "batch",
                 "device",
                 "idle_power_w",
                 "workload_power_w",
@@ -124,6 +128,7 @@ def main() -> None:
                 "k",
                 "heads",
                 "head_dim",
+                "batch",
                 "latency_ms",
                 "dynamic_power_w",
                 "dynamic_energy_mj",

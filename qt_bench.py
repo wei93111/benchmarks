@@ -598,6 +598,7 @@ def run_latency_sweep(
     batch: int = BATCH,
     warmup: int = WARMUP,
     iters: int = ITERS,
+    trim_fraction: float = TRIM,
 ) -> None:
     if threads is not None:
         torch.set_num_threads(threads)
@@ -616,7 +617,13 @@ def run_latency_sweep(
                 batch=batch,
             )
             run_once = make_workload(attn, queries, keys, values, get_device(backend))
-            result = measure_latency(config=config, run_once=run_once, warmup=warmup, iters=iters)
+            result = measure_latency(
+                config=config,
+                run_once=run_once,
+                warmup=warmup,
+                iters=iters,
+                trim_fraction=trim_fraction,
+            )
             print_result(result)
             append_csv(out, result)
 
