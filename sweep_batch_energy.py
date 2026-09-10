@@ -5,8 +5,10 @@ Work is treated as proportional to heads * batch (fixed n, k, levels, head_dim).
 Energy per forward is dynamic_power_W * latency_ms (mJ).
 Efficiency is work / energy, normalized so H=1 B=1 is 1.0.
 
-Idle power is measured once. Each (H, B) then gets a latency measurement and a
-steady nvidia-smi workload sample, matching gpu_power.sh windows and trim.
+Idle power is measured once. Each (H, B) then gets a short latency measurement
+and a nvidia-smi workload sample (same window/trim fractions as gpu_power.sh).
+Defaults are search-oriented (~5–8 min). For paper-grade watts use
+--idle-seconds 60 --power-seconds 45 --warmup 100 --iters 1000.
 
 Run on the H100 machine, for example:
 
@@ -26,7 +28,6 @@ import torch
 
 from qt_bench import (
     HEAD_DIM,
-    POWER_LOOP_SECONDS,
     RESULTS_DIR,
     TRIM,
     build_case,
@@ -44,12 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n", type=int, default=4096)
     parser.add_argument("--k", type=int, default=8)
     parser.add_argument("--head-dim", type=int, default=HEAD_DIM)
-    parser.add_argument("--warmup", type=int, default=20)
-    parser.add_argument("--iters", type=int, default=50)
-    parser.add_argument("--idle-seconds", type=float, default=60.0)
-    parser.add_argument("--power-seconds", type=float, default=POWER_LOOP_SECONDS)
+    parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--iters", type=int, default=30)
+    parser.add_argument("--idle-seconds", type=float, default=15.0)
+    parser.add_argument("--power-seconds", type=float, default=12.0)
     parser.add_argument("--loop-ms", type=int, default=100)
-    parser.add_argument("--cooldown-seconds", type=float, default=3.0)
+    parser.add_argument("--cooldown-seconds", type=float, default=1.0)
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument(
         "--out",
