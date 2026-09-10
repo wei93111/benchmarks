@@ -97,8 +97,8 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     sweeps = (
-        (1, power_of_two_range(1, 256)),
-        (8, power_of_two_range(1, 64)),
+        (1, power_of_two_range(1, 1024)),
+        (8, power_of_two_range(1, 256)),
     )
 
     print(
