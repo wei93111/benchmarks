@@ -56,9 +56,10 @@ python3 gpu_speed.py \
   --backend triton --n 1024 --k 4 --heads 1 --batch 1 --warmup 10 --iters 100
 ```
 
-GPU latency timing batches 10 invocations per CUDA event pair for
-`n < 65536`; `n=65536` remains unbatched. The reported value is always
-milliseconds per invocation.
+GPU latency timing groups 10 forward invocations per CUDA event pair for
+`n < 65536` (including input `--batch` > 1). `n=65536` remains one invocation
+per event. The reported value is always milliseconds per forward, and
+`--batch` is the NCHW data batch in that forward.
 
 ## Full Triton Sweep
 

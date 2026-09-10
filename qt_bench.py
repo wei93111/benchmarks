@@ -503,7 +503,7 @@ def measure_latency(
         ender = torch.cuda.Event(enable_timing=True)
         timing_batch_size = (
             1
-            if config.n == CUDA_UNBATCHED_N or config.batch > 1
+            if config.n == CUDA_UNBATCHED_N
             else min(CUDA_TIMING_BATCH_SIZE, iters)
         )
         complete_batches, remainder = divmod(iters, timing_batch_size)
@@ -581,8 +581,8 @@ def print_result(result: LatencyResult) -> None:
         f"backend={result.backend} n={result.n} k={result.k} levels={result.levels} "
         f"heads={result.heads} batch={result.batch} head_dim={result.head_dim} dtype={result.dtype} "
         f"mean_ms={result.latency_ms_mean:.6f} median_ms={result.latency_ms_median:.6f} "
-        f"batch_size={result.timing_batch_size} "
-        f"kept_batches={result.samples_kept}/{result.timed_batches}"
+        f"timing_batch={result.timing_batch_size} "
+        f"kept_timing_batches={result.samples_kept}/{result.timed_batches}"
     )
 
 
