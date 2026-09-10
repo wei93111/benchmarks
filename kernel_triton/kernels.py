@@ -3,7 +3,7 @@
 The kernels intentionally target the benchmark configuration:
 
 * FP32 forward inference
-* batch size 1
+* arbitrary batch size
 * head dimension 64
 * 1 or 8 heads
 * top-k in {4, 8, 16}
@@ -34,21 +34,25 @@ def _coarse_attention_kernel(
     n_tokens: tl.constexpr,
     n_heads: tl.constexpr,
     head_dim: tl.constexpr,
+    n_channels: tl.constexpr,
     topk: tl.constexpr,
     sm_scale: tl.constexpr,
     block_n: tl.constexpr,
     block_d: tl.constexpr,
 ):
-    """Dense attention plus routing top-k, one program per (query, head)."""
+    """Dense attention plus routing top-k, one program per (batch, query, head)."""
     pid = tl.program_id(0)
     head = pid % n_heads
-    query_idx = pid // n_heads
+    tmp = pid // n_heads
+    query_idx = tmp % n_tokens
+    batch = tmp // n_tokens
 
     d = tl.arange(0, block_d)
     d_mask = d < head_dim
     spatial_stride = n_tokens
+    batch_stride = n_channels * spatial_stride
     channel = head * head_dim + d
-    query_offsets = channel * spatial_stride + query_idx
+    query_offsets = batch * batch_stride + channel * spatial_stride + query_idx
     query = tl.load(query_ptr + query_offsets, mask=d_mask, other=0.0).to(tl.float32)
 
     accumulator = tl.zeros((block_d,), dtype=tl.float32)
@@ -64,6 +68,7 @@ def _coarse_attention_kernel(
 
         key_ptrs = (
             key_ptr
+            + batch * batch_stride
             + (head * head_dim + d[None, :]) * spatial_stride
             + key_offsets[:, None]
         )
@@ -104,6 +109,7 @@ def _coarse_attention_kernel(
 
         value_ptrs = (
             value_ptr
+            + batch * batch_stride
             + (head * head_dim + d[None, :]) * spatial_stride
             + key_offsets[:, None]
         )
@@ -120,14 +126,14 @@ def _coarse_attention_kernel(
         running_sum = running_sum * old_scale + tl.sum(probabilities, axis=0)
         running_max = new_max
 
-    output_offsets = (query_idx * n_heads + head) * head_dim + d
+    output_offsets = ((batch * n_tokens + query_idx) * n_heads + head) * head_dim + d
     tl.store(
         output_ptr + output_offsets,
         accumulator / running_sum,
         mask=d_mask,
     )
 
-    topk_offsets = (query_idx * topk + rank_offsets) * n_heads + head
+    topk_offsets = ((batch * n_tokens + query_idx) * topk + rank_offsets) * n_heads + head
     tl.store(topk_idx_ptr + topk_offsets, best_indices)
 
 
@@ -143,6 +149,8 @@ def _fine_attention_kernel(
     width: tl.constexpr,
     n_heads: tl.constexpr,
     head_dim: tl.constexpr,
+    n_channels: tl.constexpr,
+    n_parent: tl.constexpr,
     previous_topk: tl.constexpr,
     next_topk: tl.constexpr,
     sm_scale: tl.constexpr,
@@ -153,7 +161,9 @@ def _fine_attention_kernel(
     """Sparse attention for four query children, fused in one program."""
     pid = tl.program_id(0)
     head = pid % n_heads
-    parent_idx = pid // n_heads
+    tmp = pid // n_heads
+    parent_idx = tmp % n_parent
+    batch = tmp // n_parent
 
     parent_width = width // 2
     parent_y = parent_idx // parent_width
@@ -167,8 +177,10 @@ def _fine_attention_kernel(
     d = tl.arange(0, block_d)
     d_mask = d < head_dim
     spatial_stride = height * width
+    batch_stride = n_channels * spatial_stride
     query_offsets = (
-        (head * head_dim + d[None, :]) * spatial_stride
+        batch * batch_stride
+        + (head * head_dim + d[None, :]) * spatial_stride
         + query_spatial_idx[:, None]
     )
     query = tl.load(
@@ -184,7 +196,7 @@ def _fine_attention_kernel(
     child = candidate_offset % 4
 
     previous_index_offsets = (
-        (parent_idx * previous_topk + previous_rank) * n_heads + head
+        ((batch * n_parent + parent_idx) * previous_topk + previous_rank) * n_heads + head
     )
     previous_indices = tl.load(
         previous_topk_idx_ptr + previous_index_offsets,
@@ -200,6 +212,7 @@ def _fine_attention_kernel(
 
     key_ptrs = (
         key_ptr
+        + batch * batch_stride
         + (head * head_dim + d[None, :]) * spatial_stride
         + candidate_indices[:, None]
     )
@@ -228,6 +241,7 @@ def _fine_attention_kernel(
 
     value_ptrs = (
         value_ptr
+        + batch * batch_stride
         + (head * head_dim + d[None, :]) * spatial_stride
         + candidate_indices[:, None]
     )
@@ -239,7 +253,7 @@ def _fine_attention_kernel(
     message = tl.dot(probabilities, values, input_precision="ieee")
 
     output_offsets = (
-        ((parent_idx * 4 + query_in_parent[:, None]) * n_heads + head)
+        (((batch * n_parent + parent_idx) * 4 + query_in_parent[:, None]) * n_heads + head)
         * head_dim
         + d[None, :]
     )
@@ -267,7 +281,7 @@ def _fine_attention_kernel(
             axis=1,
         )
         next_index_offset = (
-            (query_spatial_idx * next_topk + rank) * n_heads + head
+            ((batch * height * width + query_spatial_idx) * next_topk + rank) * n_heads + head
         )
         tl.store(
             next_topk_idx_ptr + next_index_offset,
@@ -296,8 +310,8 @@ def _validate_common(
     if query.ndim != 4:
         raise ValueError("query, key, and value must be four-dimensional NCHW tensors.")
     batch, channels, height, width = query.shape
-    if batch != 1:
-        raise ValueError("Triton baseline currently supports batch size 1 only.")
+    if batch < 1:
+        raise ValueError(f"batch size must be positive, got {batch}.")
     if height != width:
         raise ValueError("Triton baseline requires square feature maps.")
     if topk not in SUPPORTED_TOPK:
@@ -349,6 +363,7 @@ def coarse_attention(
         n_tokens=n_tokens,
         n_heads=heads,
         head_dim=SUPPORTED_HEAD_DIM,
+        n_channels=heads * SUPPORTED_HEAD_DIM,
         topk=topk,
         sm_scale=SUPPORTED_HEAD_DIM**-0.5,
         block_n=block_n,
@@ -422,6 +437,8 @@ def fine_attention(
         width=width,
         n_heads=heads,
         head_dim=SUPPORTED_HEAD_DIM,
+        n_channels=heads * SUPPORTED_HEAD_DIM,
+        n_parent=n_parent,
         previous_topk=previous_topk,
         next_topk=topk,
         sm_scale=SUPPORTED_HEAD_DIM**-0.5,

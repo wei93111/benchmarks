@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, nargs="+", default=list(K_VALUES))
     parser.add_argument("--heads", type=int, default=HEADS)
     parser.add_argument("--head-dim", type=int, default=HEAD_DIM)
+    parser.add_argument("--batch", type=int, default=1, help="Input batch size")
     parser.add_argument("--warmup", type=int, default=WARMUP)
     parser.add_argument("--iters", type=int, default=ITERS)
     parser.add_argument("--out", type=Path, default=RESULTS_DIR / "gpu_latency.csv")
@@ -36,6 +37,7 @@ def main() -> None:
         out=args.out,
         heads=args.heads,
         head_dim=args.head_dim,
+        batch=args.batch,
         warmup=args.warmup,
         iters=args.iters,
     )

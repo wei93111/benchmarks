@@ -21,7 +21,7 @@ in `qt_bench.py` and are shared with the original CUDA baseline.
 
 - CUDA GPU
 - FP32 inference
-- batch size 1
+- batch size >= 1
 - head dimension 64
 - heads 1 or 8
 - top-K 4, 8, or 16

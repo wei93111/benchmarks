@@ -23,6 +23,7 @@ K_VALUES = (4, 8, 16)
 LEVELS = 4
 HEADS = 1
 HEAD_DIM = 64
+BATCH = 1
 WARMUP = 100
 ITERS = 1000
 TRIM = 0.15
@@ -41,6 +42,7 @@ class BenchConfig:
     levels: int
     heads: int
     head_dim: int
+    batch: int
     channels: int
     side: int
     dtype: str
@@ -56,6 +58,7 @@ class LatencyResult:
     levels: int
     heads: int
     head_dim: int
+    batch: int
     channels: int
     side: int
     dtype: str
@@ -379,13 +382,16 @@ def make_pyramid(
     channels: int,
     device: torch.device,
     dtype: torch.dtype,
+    batch: int = BATCH,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
+    if batch < 1:
+        raise ValueError(f"batch must be positive, got {batch}.")
     queries: list[torch.Tensor] = []
     keys: list[torch.Tensor] = []
     values: list[torch.Tensor] = []
     for level in range(levels):
         level_side = side // (1 << level)
-        shape = (1, channels, level_side, level_side)
+        shape = (batch, channels, level_side, level_side)
         queries.append(torch.randn(shape, device=device, dtype=dtype))
         keys.append(torch.randn(shape, device=device, dtype=dtype))
         values.append(torch.randn(shape, device=device, dtype=dtype))
@@ -400,6 +406,7 @@ def build_case(
     levels: int = LEVELS,
     heads: int = HEADS,
     head_dim: int = HEAD_DIM,
+    batch: int = BATCH,
     dtype_name: str = "float32",
     lepe: bool = LEPE,
     seed: int = 0,
@@ -433,6 +440,7 @@ def build_case(
         channels=channels,
         device=device,
         dtype=dtype,
+        batch=batch,
     )
 
     config = BenchConfig(
@@ -442,6 +450,7 @@ def build_case(
         levels=levels,
         heads=heads,
         head_dim=head_dim,
+        batch=batch,
         channels=channels,
         side=side,
         dtype=dtype_name,
@@ -494,7 +503,7 @@ def measure_latency(
         ender = torch.cuda.Event(enable_timing=True)
         timing_batch_size = (
             1
-            if config.n == CUDA_UNBATCHED_N
+            if config.n == CUDA_UNBATCHED_N or config.batch > 1
             else min(CUDA_TIMING_BATCH_SIZE, iters)
         )
         complete_batches, remainder = divmod(iters, timing_batch_size)
@@ -570,7 +579,7 @@ def print_result(result: LatencyResult) -> None:
     print(
         "RESULT "
         f"backend={result.backend} n={result.n} k={result.k} levels={result.levels} "
-        f"heads={result.heads} head_dim={result.head_dim} dtype={result.dtype} "
+        f"heads={result.heads} batch={result.batch} head_dim={result.head_dim} dtype={result.dtype} "
         f"mean_ms={result.latency_ms_mean:.6f} median_ms={result.latency_ms_median:.6f} "
         f"batch_size={result.timing_batch_size} "
         f"kept_batches={result.samples_kept}/{result.timed_batches}"
@@ -586,6 +595,7 @@ def run_latency_sweep(
     threads: int | None = None,
     heads: int = HEADS,
     head_dim: int = HEAD_DIM,
+    batch: int = BATCH,
     warmup: int = WARMUP,
     iters: int = ITERS,
 ) -> None:
@@ -603,6 +613,7 @@ def run_latency_sweep(
                 k=k,
                 heads=heads,
                 head_dim=head_dim,
+                batch=batch,
             )
             run_once = make_workload(attn, queries, keys, values, get_device(backend))
             result = measure_latency(config=config, run_once=run_once, warmup=warmup, iters=iters)
@@ -619,6 +630,7 @@ def run_single_power_loop(
     threads: int | None = None,
     heads: int = HEADS,
     head_dim: int = HEAD_DIM,
+    batch: int = BATCH,
 ) -> None:
     if threads is not None:
         torch.set_num_threads(threads)
@@ -629,10 +641,11 @@ def run_single_power_loop(
         k=k,
         heads=heads,
         head_dim=head_dim,
+        batch=batch,
     )
     run_once = make_workload(attn, queries, keys, values, get_device(backend))
     iterations = run_power_loop(run_once, seconds, backend)
     print(
-        f"POWER_LOOP backend={backend} n={n} k={k} heads={heads} "
+        f"POWER_LOOP backend={backend} n={n} k={k} heads={heads} batch={batch} "
         f"head_dim={head_dim} seconds={seconds:.1f} iterations={iterations}"
     )
