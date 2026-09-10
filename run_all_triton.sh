@@ -13,6 +13,7 @@ WARMUP=100
 ITERS=1000
 POWER_LOOP_SECONDS=45
 OUT_ROOT=""
+LATENCY_CSV=""
 RUN_LATENCY=1
 RUN_POWER=1
 
@@ -31,8 +32,9 @@ Options:
   --batch N          Input batch size (default: $BATCH)
   --head-dim N       Per-head dimension; currently must be 64 (default: $HEAD_DIM)
   --out-root DIR     Output root (default: results/triton_results_heads<HEADS>[_batch<N>])
+  --latency-csv FILE Latency CSV for energy (default: <out-root>/gpu_latency.csv)
   --latency-only     Run latency sweep only
-  --power-only       Run power sweep only
+  --power-only       Run power (+energy summary) only; does not remeasure latency
   -h, --help         Show this help
 EOF
 }
@@ -53,6 +55,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-root)
       OUT_ROOT="$2"
+      shift 2
+      ;;
+    --latency-csv)
+      LATENCY_CSV="$2"
       shift 2
       ;;
     --latency-only|--speed-only)
@@ -143,4 +149,5 @@ python3 "$SCRIPT_DIR/kernel_triton/summarize_results.py" \
   --root "$OUT_ROOT" \
   --heads "$HEADS" \
   --head-dim "$HEAD_DIM" \
-  --batch "$BATCH"
+  --batch "$BATCH" \
+  ${LATENCY_CSV:+--latency-csv "$LATENCY_CSV"}

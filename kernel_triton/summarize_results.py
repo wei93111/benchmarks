@@ -43,9 +43,16 @@ def main() -> None:
     parser.add_argument("--heads", type=int, required=True)
     parser.add_argument("--head-dim", type=int, required=True)
     parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument(
+        "--latency-csv",
+        type=Path,
+        default=None,
+        help="Latency CSV used for energy. Defaults to <root>/gpu_latency.csv.",
+    )
     args = parser.parse_args()
 
-    latency_rows = read_latency(args.root / "gpu_latency.csv")
+    latency_path = args.latency_csv or (args.root / "gpu_latency.csv")
+    latency_rows = read_latency(latency_path)
     power_rows: list[dict[str, object]] = []
     energy_rows: list[dict[str, object]] = []
 

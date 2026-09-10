@@ -95,3 +95,14 @@ Use `--latency-only` while developing kernels to avoid the long power sweep.
 The full power sweep samples 60 seconds of idle power and 45 seconds of workload
 power for each of the 12 `(n, K)` configurations, so allow about 21 minutes per
 head-count sweep.
+
+Power and energy only, using an existing latency CSV:
+
+```bash
+./run_all_triton.sh \
+  --heads 8 \
+  --batch 32 \
+  --power-only \
+  --out-root "$PWD/results/H100_triton_results_h8_b32" \
+  --latency-csv "$PWD/results/H100_triton_results_h8_b32/gpu_latency.csv"
+```
