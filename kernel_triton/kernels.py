@@ -881,7 +881,7 @@ def coarse_attention_int8(
     if n_tokens <= 64:
         block_n = 64
     elif n_tokens <= 256:
-        block_n = 128
+        block_n = 256
     else:
         block_n = 256
     grid = (batch * triton.cdiv(n_tokens, block_m) * heads,)
