@@ -313,6 +313,8 @@ def _coarse_attention_int8_kernel(
     n_channels: tl.constexpr,
     topk: tl.constexpr,
     sm_scale: tl.constexpr,
+    prob_scale: tl.constexpr,
+    input_scale: tl.constexpr,
     block_m: tl.constexpr,
     block_n: tl.constexpr,
     block_d: tl.constexpr,
@@ -413,13 +415,13 @@ def _coarse_attention_int8_kernel(
             other=0,
         ).to(tl.int8)
         probabilities_i8 = tl.minimum(
-            tl.maximum(probabilities * INT8_PROB_SCALE + 0.5, 0.0),
-            INT8_PROB_SCALE,
+            tl.maximum(probabilities * prob_scale + 0.5, 0.0),
+            prob_scale,
         ).to(tl.int8)
         sv_i32 = tl.dot(probabilities_i8, values, out_dtype=tl.int32)
         accumulator = (
             accumulator * old_scale[:, None]
-            + sv_i32.to(tl.float32) / (INT8_PROB_SCALE * INT8_INPUT_SCALE)
+            + sv_i32.to(tl.float32) / (prob_scale * input_scale)
         )
         running_sum = running_sum * old_scale + tl.sum(probabilities, axis=1)
         running_max = new_max
@@ -462,6 +464,8 @@ def _fine_attention_int8_kernel(
     previous_topk: tl.constexpr,
     next_topk: tl.constexpr,
     sm_scale: tl.constexpr,
+    prob_scale: tl.constexpr,
+    input_scale: tl.constexpr,
     block_candidates: tl.constexpr,
     block_queries: tl.constexpr,
     block_d: tl.constexpr,
@@ -549,8 +553,8 @@ def _fine_attention_int8_kernel(
     probability_sum = tl.where(query_mask, probability_sum, 1.0)
     probabilities /= probability_sum[:, None]
     probabilities_i8 = tl.minimum(
-        tl.maximum(probabilities * INT8_PROB_SCALE + 0.5, 0.0),
-        INT8_PROB_SCALE,
+        tl.maximum(probabilities * prob_scale + 0.5, 0.0),
+        prob_scale,
     ).to(tl.int8)
 
     value_ptrs = (
@@ -566,7 +570,7 @@ def _fine_attention_int8_kernel(
     ).to(tl.int8)
     message_i32 = tl.dot(probabilities_i8, values, out_dtype=tl.int32)
     message = (
-        message_i32.to(tl.float32) / (INT8_PROB_SCALE * INT8_INPUT_SCALE)
+        message_i32.to(tl.float32) / (prob_scale * input_scale)
     ).to(tl.float16)
 
     output_offsets = (
@@ -888,6 +892,8 @@ def coarse_attention_int8(
         n_channels=heads * SUPPORTED_HEAD_DIM,
         topk=topk,
         sm_scale=SUPPORTED_HEAD_DIM**-0.5 / (INT8_INPUT_SCALE**2),
+        prob_scale=INT8_PROB_SCALE,
+        input_scale=INT8_INPUT_SCALE,
         block_m=block_m,
         block_n=block_n,
         block_d=SUPPORTED_HEAD_DIM,
@@ -950,6 +956,8 @@ def fine_attention_int8(
         previous_topk=previous_topk,
         next_topk=topk,
         sm_scale=SUPPORTED_HEAD_DIM**-0.5 / (INT8_INPUT_SCALE**2),
+        prob_scale=INT8_PROB_SCALE,
+        input_scale=INT8_INPUT_SCALE,
         block_candidates=block_candidates,
         block_queries=16,
         block_d=SUPPORTED_HEAD_DIM,
