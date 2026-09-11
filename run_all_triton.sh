@@ -9,6 +9,7 @@ K_VALUES=(4 8 16)
 HEADS=1
 HEAD_DIM=64
 BATCH=1
+PRECISION=fp32
 WARMUP=100
 ITERS=1000
 POWER_LOOP_SECONDS=45
@@ -25,11 +26,12 @@ Usage:
 Runs the fused Triton GPU baseline for:
   n = ${N_VALUES[*]}
   k = ${K_VALUES[*]}
-  heads=$HEADS batch=$BATCH head_dim=$HEAD_DIM warmup=$WARMUP iters=$ITERS
+  heads=$HEADS batch=$BATCH precision=$PRECISION head_dim=$HEAD_DIM warmup=$WARMUP iters=$ITERS
 
 Options:
   --heads N          Number of attention heads: 1 or 8 (default: $HEADS)
   --batch N          Input batch size (default: $BATCH)
+  --precision MODE   fp32 (default) or int8-fp16
   --head-dim N       Per-head dimension; currently must be 64 (default: $HEAD_DIM)
   --out-root DIR     Output root (default: results/triton_results_heads<HEADS>[_batch<N>])
   --latency-csv FILE Latency CSV for energy (default: <out-root>/gpu_latency.csv)
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --batch)
       BATCH="$2"
+      shift 2
+      ;;
+    --precision)
+      PRECISION="$2"
       shift 2
       ;;
     --head-dim)
@@ -93,11 +99,19 @@ if [[ "$BATCH" -lt 1 ]]; then
   echo "Batch size must be a positive integer, got $BATCH." >&2
   exit 2
 fi
+if [[ "$PRECISION" != "fp32" && "$PRECISION" != "int8-fp16" ]]; then
+  echo "Precision must be fp32 or int8-fp16, got $PRECISION." >&2
+  exit 2
+fi
 if [[ -z "$OUT_ROOT" ]]; then
+  PRECISION_SUFFIX=""
+  if [[ "$PRECISION" != "fp32" ]]; then
+    PRECISION_SUFFIX="_${PRECISION}"
+  fi
   if [[ "$BATCH" -eq 1 ]]; then
-    OUT_ROOT="$SCRIPT_DIR/results/triton_results_heads${HEADS}"
+    OUT_ROOT="$SCRIPT_DIR/results/triton_results_heads${HEADS}${PRECISION_SUFFIX}"
   else
-    OUT_ROOT="$SCRIPT_DIR/results/triton_results_heads${HEADS}_batch${BATCH}"
+    OUT_ROOT="$SCRIPT_DIR/results/triton_results_heads${HEADS}_batch${BATCH}${PRECISION_SUFFIX}"
   fi
 fi
 
@@ -128,6 +142,7 @@ if [[ "$RUN_LATENCY" -eq 1 ]]; then
     --heads "$HEADS" \
     --head-dim "$HEAD_DIM" \
     --batch "$BATCH" \
+    --precision "$PRECISION" \
     --warmup "$WARMUP" \
     --iters "$ITERS" \
     --out "$OUT_ROOT/gpu_latency.csv"
@@ -140,7 +155,7 @@ if [[ "$RUN_POWER" -eq 1 ]]; then
       "$SCRIPT_DIR/gpu_power.sh" \
         --out-dir "$OUT_ROOT/power/gpu_n${n}_k${k}" \
         -- \
-        python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='triton', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, batch=$BATCH, seconds=POWER_LOOP_SECONDS)"
+        python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); from qt_bench import run_single_power_loop, POWER_LOOP_SECONDS; run_single_power_loop(backend='triton', n=$n, k=$k, heads=$HEADS, head_dim=$HEAD_DIM, batch=$BATCH, precision='$PRECISION', seconds=POWER_LOOP_SECONDS)"
     done
   done
 fi
@@ -150,4 +165,5 @@ python3 "$SCRIPT_DIR/kernel_triton/summarize_results.py" \
   --heads "$HEADS" \
   --head-dim "$HEAD_DIM" \
   --batch "$BATCH" \
+  --precision "$PRECISION" \
   ${LATENCY_CSV:+--latency-csv "$LATENCY_CSV"}

@@ -43,6 +43,7 @@ def main() -> None:
     parser.add_argument("--heads", type=int, required=True)
     parser.add_argument("--head-dim", type=int, required=True)
     parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument("--precision", default="fp32")
     parser.add_argument(
         "--latency-csv",
         type=Path,
@@ -85,6 +86,7 @@ def main() -> None:
                 "heads": args.heads,
                 "head_dim": args.head_dim,
                 "batch": args.batch,
+                "precision": args.precision,
                 "device": device,
                 "idle_power_w": f"{idle:.4f}",
                 "workload_power_w": f"{workload:.4f}",
@@ -102,6 +104,7 @@ def main() -> None:
                     "heads": args.heads,
                     "head_dim": args.head_dim,
                     "batch": args.batch,
+                    "precision": args.precision,
                     "latency_ms": f"{latency_ms:.6f}",
                     "dynamic_power_w": f"{dynamic:.4f}",
                     "dynamic_energy_mj": f"{dynamic * latency_ms:.6f}",
@@ -119,6 +122,7 @@ def main() -> None:
                 "heads",
                 "head_dim",
                 "batch",
+                "precision",
                 "device",
                 "idle_power_w",
                 "workload_power_w",
@@ -136,6 +140,7 @@ def main() -> None:
                 "heads",
                 "head_dim",
                 "batch",
+                "precision",
                 "latency_ms",
                 "dynamic_power_w",
                 "dynamic_energy_mj",

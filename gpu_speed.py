@@ -6,7 +6,19 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from qt_bench import HEAD_DIM, HEADS, ITERS, K_VALUES, N_VALUES, RESULTS_DIR, TRIM, WARMUP, run_latency_sweep
+from qt_bench import (
+    HEAD_DIM,
+    HEADS,
+    ITERS,
+    K_VALUES,
+    N_VALUES,
+    PRECISION_FP32,
+    PRECISION_VALUES,
+    RESULTS_DIR,
+    TRIM,
+    WARMUP,
+    run_latency_sweep,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--heads", type=int, default=HEADS)
     parser.add_argument("--head-dim", type=int, default=HEAD_DIM)
     parser.add_argument("--batch", type=int, default=1, help="Input batch size")
+    parser.add_argument(
+        "--precision",
+        choices=PRECISION_VALUES,
+        default=PRECISION_FP32,
+        help="fp32 (default), or INT8 QK/SV with FP16 elsewhere",
+    )
     parser.add_argument("--warmup", type=int, default=WARMUP)
     parser.add_argument("--iters", type=int, default=ITERS)
     parser.add_argument("--trim", type=float, default=TRIM, help="Symmetric outlier trim fraction")
@@ -39,6 +57,7 @@ def main() -> None:
         heads=args.heads,
         head_dim=args.head_dim,
         batch=args.batch,
+        precision=args.precision,
         warmup=args.warmup,
         iters=args.iters,
         trim_fraction=args.trim,

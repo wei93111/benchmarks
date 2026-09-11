@@ -20,7 +20,9 @@ in `qt_bench.py` and are shared with the original CUDA baseline.
 ## Supported Configuration
 
 - CUDA GPU
-- FP32 inference
+- FP32 inference by default
+- optional INT8 QK/SV and INT8 LePE depthwise convolution with INT32
+  accumulation, FP16 routing/output, and FP32 online-softmax accumulation
 - batch size >= 1
 - head dimension 64
 - heads 1 or 8
@@ -54,6 +56,22 @@ during benchmark warmup.
 ```bash
 python3 gpu_speed.py \
   --backend triton --n 1024 --k 4 --heads 1 --batch 1 --warmup 10 --iters 100
+```
+
+The default remains the original full-FP32 path. The opt-in quantized-datapath
+mode allocates synthetic Q/K/V and LePE weights directly as INT8, so it requires
+no separate quantization pass. It uses fixed dummy scales (`Q/K/V scale = 16`,
+LePE weight scale = 16, probability scale = 127) and zero INT32 LePE bias.
+QK and SV use INT8 Tensor-Core dot products with INT32 results. LePE uses an
+INT8 depthwise 3x3 convolution with INT32 accumulation. Routing and messages use
+FP16, while numerically sensitive coarse online-softmax state accumulates in
+FP32. This mode is intended for architecture-level latency and power
+measurements, not accuracy evaluation or deployment.
+
+```bash
+python3 gpu_speed.py \
+  --backend triton --precision int8-fp16 \
+  --n 1024 --k 4 --heads 8 --batch 32 --warmup 10 --iters 100
 ```
 
 GPU latency timing groups 10 forward invocations per CUDA event pair for
@@ -105,4 +123,30 @@ Power and energy only, using an existing latency CSV:
   --power-only \
   --out-root "$PWD/results/H100_triton_results_h8_b32" \
   --latency-csv "$PWD/results/H100_triton_results_h8_b32/gpu_latency.csv"
+```
+
+## INT8 QK/SV + FP16 Sweep
+
+Latency only:
+
+```bash
+./run_all_triton.sh \
+  --precision int8-fp16 --heads 8 --batch 32 --latency-only \
+  --out-root "$PWD/results/H100_triton_int8_fp16_h8_b32"
+```
+
+Power only (and energy when the latency CSV is in the same output root):
+
+```bash
+./run_all_triton.sh \
+  --precision int8-fp16 --heads 8 --batch 32 --power-only \
+  --out-root "$PWD/results/H100_triton_int8_fp16_h8_b32"
+```
+
+Latency and power:
+
+```bash
+./run_all_triton.sh \
+  --precision int8-fp16 --heads 8 --batch 32 \
+  --out-root "$PWD/results/H100_triton_int8_fp16_h8_b32"
 ```

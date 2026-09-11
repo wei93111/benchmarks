@@ -32,6 +32,9 @@ CUDA_UNBATCHED_N = 65536
 CPU_THREADS = None
 POWER_LOOP_SECONDS = 45.0
 LEPE = True
+PRECISION_FP32 = "fp32"
+PRECISION_INT8_FP16 = "int8-fp16"
+PRECISION_VALUES = (PRECISION_FP32, PRECISION_INT8_FP16)
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class BenchConfig:
     heads: int
     head_dim: int
     batch: int
+    precision: str
     channels: int
     side: int
     dtype: str
@@ -59,6 +63,7 @@ class LatencyResult:
     heads: int
     head_dim: int
     batch: int
+    precision: str
     channels: int
     side: int
     dtype: str
@@ -147,6 +152,22 @@ def coarse_attention_triton_op(
     return coarse_attention(query, key, value, topk)
 
 
+def coarse_attention_triton_int8_op(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    topk: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    try:
+        from kernel_triton import coarse_attention_int8
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Missing Triton kernel dependencies. Check the environment with:\n"
+            "  benchmarks/kernel_triton/build.sh"
+        ) from exc
+    return coarse_attention_int8(query, key, value, topk)
+
+
 def fine_attention_triton_op(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -162,6 +183,38 @@ def fine_attention_triton_op(
             "  benchmarks/kernel_triton/build.sh"
         ) from exc
     return fine_attention(query, key, value, previous_topk_idx, topk)
+
+
+def fine_attention_triton_int8_op(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    previous_topk_idx: torch.Tensor,
+    topk: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    try:
+        from kernel_triton import fine_attention_int8
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Missing Triton kernel dependencies. Check the environment with:\n"
+            "  benchmarks/kernel_triton/build.sh"
+        ) from exc
+    return fine_attention_int8(query, key, value, previous_topk_idx, topk)
+
+
+def lepe_triton_int8_op(
+    value: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+) -> torch.Tensor:
+    try:
+        from kernel_triton import depthwise_conv3x3_int8
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Missing Triton kernel dependencies. Check the environment with:\n"
+            "  benchmarks/kernel_triton/build.sh"
+        ) from exc
+    return depthwise_conv3x3_int8(value, weight, bias)
 
 
 score_computation_op = score_computation_torch
@@ -181,6 +234,7 @@ class QTAttB(nn.Module):
         attention_dropout=0.1,
         lepe=False,
         backend="torch_cpu",
+        precision=PRECISION_FP32,
     ):
         super().__init__()
         del attention_dropout
@@ -190,7 +244,19 @@ class QTAttB(nn.Module):
         self.dim = dim
         self.lepe = lepe
         self.backend = backend
-        if lepe:
+        self.precision = precision
+        if lepe and precision == PRECISION_INT8_FP16:
+            channels = dim * nhead
+            for level in range(scale):
+                self.register_buffer(
+                    f"lepe_weight_int8_{level}",
+                    torch.randint(-16, 17, (channels, 3, 3), dtype=torch.int8),
+                )
+                self.register_buffer(
+                    f"lepe_bias_int32_{level}",
+                    torch.zeros(channels, dtype=torch.int32),
+                )
+        elif lepe:
             self.get_vs = nn.ModuleList(
                 [
                     nn.Conv2d(dim * nhead, dim * nhead, kernel_size=3, stride=1, padding=1, groups=dim * nhead)
@@ -201,7 +267,14 @@ class QTAttB(nn.Module):
 
     def process_coarse_level(self, query, key, value, topk):
         if self.backend == "triton":
-            message, topk_idx = coarse_attention_triton_op(query, key, value, topk)
+            if self.precision == PRECISION_INT8_FP16:
+                message, topk_idx = coarse_attention_triton_int8_op(
+                    query, key, value, topk
+                )
+            else:
+                message, topk_idx = coarse_attention_triton_op(
+                    query, key, value, topk
+                )
             return None, message, None, topk_idx
 
         batch, channels, height, width = key.shape
@@ -255,13 +328,14 @@ class QTAttB(nn.Module):
         return probs, message, topk_score, topk_idx
 
     def process_fine_level_triton(self, query, key, value, previous_topk_idx, topk):
-        message, topk_idx = fine_attention_triton_op(
-            query,
-            key,
-            value,
-            previous_topk_idx,
-            topk,
-        )
+        if self.precision == PRECISION_INT8_FP16:
+            message, topk_idx = fine_attention_triton_int8_op(
+                query, key, value, previous_topk_idx, topk
+            )
+        else:
+            message, topk_idx = fine_attention_triton_op(
+                query, key, value, previous_topk_idx, topk
+            )
         return None, message, None, topk_idx
 
     def forward(self, queries, keys, values, q_mask=None, kv_mask=None):
@@ -271,7 +345,9 @@ class QTAttB(nn.Module):
         topk_pos = None
         previous_topk_idx = None
 
-        for i, (query, key, value) in enumerate(zip(reversed(queries), reversed(keys), reversed(values))):
+        for i, (query, key, value) in enumerate(
+            zip(reversed(queries), reversed(keys), reversed(values))
+        ):
             if i == 0:
                 _, message, topk_score, topk_idx = self.process_coarse_level(query, key, value, topk)
             else:
@@ -301,7 +377,14 @@ class QTAttB(nn.Module):
         final_message = 0
         for i, message in enumerate(messages):
             if self.lepe:
-                lepe = self.get_vs[i](values[-(i + 1)])
+                if self.precision == PRECISION_INT8_FP16:
+                    lepe = lepe_triton_int8_op(
+                        values[-(i + 1)],
+                        getattr(self, f"lepe_weight_int8_{i}"),
+                        getattr(self, f"lepe_bias_int32_{i}"),
+                    )
+                else:
+                    lepe = self.get_vs[i](values[-(i + 1)])
             if i == 0:
                 if self.lepe:
                     lepe = rearrange(lepe, "b (hd d) H W -> b (H W) hd d", hd=self.nhead)
@@ -392,9 +475,25 @@ def make_pyramid(
     for level in range(levels):
         level_side = side // (1 << level)
         shape = (batch, channels, level_side, level_side)
-        queries.append(torch.randn(shape, device=device, dtype=dtype))
-        keys.append(torch.randn(shape, device=device, dtype=dtype))
-        values.append(torch.randn(shape, device=device, dtype=dtype))
+        if dtype == torch.int8:
+            # Synthetic benchmark tensors are allocated directly in the
+            # quantized domain; no setup quantization pass is required.
+            def make_int8() -> torch.Tensor:
+                return torch.randint(
+                    -16,
+                    17,
+                    shape,
+                    device=device,
+                    dtype=torch.int8,
+                )
+
+            queries.append(make_int8())
+            keys.append(make_int8())
+            values.append(make_int8())
+        else:
+            queries.append(torch.randn(shape, device=device, dtype=dtype))
+            keys.append(torch.randn(shape, device=device, dtype=dtype))
+            values.append(torch.randn(shape, device=device, dtype=dtype))
     return queries, keys, values
 
 
@@ -407,14 +506,23 @@ def build_case(
     heads: int = HEADS,
     head_dim: int = HEAD_DIM,
     batch: int = BATCH,
+    precision: str = PRECISION_FP32,
     dtype_name: str = "float32",
     lepe: bool = LEPE,
     seed: int = 0,
 ):
     if backend not in {"cuda_ref", "triton", "torch_cpu"}:
         raise ValueError(f"Unknown backend {backend!r}.")
+    if precision not in PRECISION_VALUES:
+        raise ValueError(f"precision must be one of {PRECISION_VALUES}, got {precision!r}.")
+    if precision == PRECISION_INT8_FP16 and backend != "triton":
+        raise ValueError("INT8/FP16 precision is supported only by the Triton backend.")
     device = get_device(backend)
-    dtype = get_dtype(dtype_name, device, backend)
+    dtype = (
+        torch.int8
+        if precision == PRECISION_INT8_FP16
+        else get_dtype(dtype_name, device, backend)
+    )
     side = validate_shape(n, k, levels)
     channels = heads * head_dim
     configure_backend_ops(backend)
@@ -430,8 +538,10 @@ def build_case(
         topks=[k] * levels,
         lepe=lepe,
         backend=backend,
+        precision=precision,
     )
-    attn = attn.to(device=device, dtype=dtype)
+    module_dtype = torch.float16 if precision == PRECISION_INT8_FP16 else dtype
+    attn = attn.to(device=device, dtype=module_dtype)
     attn.eval()
 
     queries, keys, values = make_pyramid(
@@ -451,9 +561,10 @@ def build_case(
         heads=heads,
         head_dim=head_dim,
         batch=batch,
+        precision=precision,
         channels=channels,
         side=side,
-        dtype=dtype_name,
+        dtype="int8-qksv/fp16-elsewhere" if precision == PRECISION_INT8_FP16 else dtype_name,
         device=torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
         lepe=lepe,
     )
@@ -579,7 +690,8 @@ def print_result(result: LatencyResult) -> None:
     print(
         "RESULT "
         f"backend={result.backend} n={result.n} k={result.k} levels={result.levels} "
-        f"heads={result.heads} batch={result.batch} head_dim={result.head_dim} dtype={result.dtype} "
+        f"heads={result.heads} batch={result.batch} head_dim={result.head_dim} "
+        f"precision={result.precision} dtype={result.dtype} "
         f"mean_ms={result.latency_ms_mean:.6f} median_ms={result.latency_ms_median:.6f} "
         f"timing_batch={result.timing_batch_size} "
         f"kept_timing_batches={result.samples_kept}/{result.timed_batches}"
@@ -596,6 +708,7 @@ def run_latency_sweep(
     heads: int = HEADS,
     head_dim: int = HEAD_DIM,
     batch: int = BATCH,
+    precision: str = PRECISION_FP32,
     warmup: int = WARMUP,
     iters: int = ITERS,
     trim_fraction: float = TRIM,
@@ -615,6 +728,7 @@ def run_latency_sweep(
                 heads=heads,
                 head_dim=head_dim,
                 batch=batch,
+                precision=precision,
             )
             run_once = make_workload(attn, queries, keys, values, get_device(backend))
             result = measure_latency(
@@ -638,6 +752,7 @@ def run_single_power_loop(
     heads: int = HEADS,
     head_dim: int = HEAD_DIM,
     batch: int = BATCH,
+    precision: str = PRECISION_FP32,
 ) -> None:
     if threads is not None:
         torch.set_num_threads(threads)
@@ -649,10 +764,11 @@ def run_single_power_loop(
         heads=heads,
         head_dim=head_dim,
         batch=batch,
+        precision=precision,
     )
     run_once = make_workload(attn, queries, keys, values, get_device(backend))
     iterations = run_power_loop(run_once, seconds, backend)
     print(
-        f"POWER_LOOP backend={backend} n={n} k={k} heads={heads} batch={batch} "
+        f"POWER_LOOP backend={backend} n={n} k={k} heads={heads} batch={batch} precision={precision} "
         f"head_dim={head_dim} seconds={seconds:.1f} iterations={iterations}"
     )
