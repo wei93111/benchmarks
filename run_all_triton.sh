@@ -135,17 +135,22 @@ PY
 if [[ "$RUN_LATENCY" -eq 1 ]]; then
   echo "[run-all-triton] latency sweep"
   rm -f "$OUT_ROOT/gpu_latency.csv"
-  python3 "$SCRIPT_DIR/gpu_speed.py" \
-    --backend triton \
-    --n "${N_VALUES[@]}" \
-    --k "${K_VALUES[@]}" \
-    --heads "$HEADS" \
-    --head-dim "$HEAD_DIM" \
-    --batch "$BATCH" \
-    --precision "$PRECISION" \
-    --warmup "$WARMUP" \
-    --iters "$ITERS" \
-    --out "$OUT_ROOT/gpu_latency.csv"
+  for n in "${N_VALUES[@]}"; do
+    for k in "${K_VALUES[@]}"; do
+      echo "[run-all-triton] latency n=$n k=$k"
+      python3 "$SCRIPT_DIR/gpu_speed.py" \
+        --backend triton \
+        --n "$n" \
+        --k "$k" \
+        --heads "$HEADS" \
+        --head-dim "$HEAD_DIM" \
+        --batch "$BATCH" \
+        --precision "$PRECISION" \
+        --warmup "$WARMUP" \
+        --iters "$ITERS" \
+        --out "$OUT_ROOT/gpu_latency.csv"
+    done
+  done
 fi
 
 if [[ "$RUN_POWER" -eq 1 ]]; then
