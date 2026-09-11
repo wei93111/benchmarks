@@ -300,17 +300,17 @@ def _fine_attention_kernel(
         )
 
 
-@triton.jit(do_not_specialize=["n_tokens", "n_heads", "n_channels"])
+@triton.jit
 def _coarse_attention_int8_kernel(
     query_ptr,
     key_ptr,
     value_ptr,
     output_ptr,
     topk_idx_ptr,
-    n_tokens,
-    n_heads,
-    n_channels,
+    n_tokens: tl.constexpr,
+    n_heads: tl.constexpr,
     head_dim: tl.constexpr,
+    n_channels: tl.constexpr,
     topk: tl.constexpr,
     sm_scale: tl.constexpr,
     prob_scale: tl.constexpr,
@@ -330,8 +330,8 @@ def _coarse_attention_int8_kernel(
     query_mask = query_idx < n_tokens
     d = tl.arange(0, block_d)
     d_mask = d < head_dim
-    spatial_stride = n_tokens.to(tl.int64)
-    batch_stride = n_channels.to(tl.int64) * spatial_stride
+    spatial_stride = n_tokens
+    batch_stride = n_channels * spatial_stride
 
     query_offsets = (
         batch * batch_stride
@@ -427,8 +427,7 @@ def _coarse_attention_int8_kernel(
         running_max = new_max
 
     output_offsets = (
-        ((batch.to(tl.int64) * n_tokens + query_idx[:, None].to(tl.int64)) * n_heads + head)
-        * head_dim
+        ((batch * n_tokens + query_idx[:, None]) * n_heads + head) * head_dim
         + d[None, :]
     )
     tl.store(
@@ -437,18 +436,18 @@ def _coarse_attention_int8_kernel(
         mask=query_mask[:, None] & d_mask[None, :],
     )
     topk_offsets = (
-        ((batch.to(tl.int64) * n_tokens + query_idx[:, None].to(tl.int64)) * topk + rank_offsets[None, :])
+        ((batch * n_tokens + query_idx[:, None]) * topk + rank_offsets[None, :])
         * n_heads
         + head
     )
     tl.store(
         topk_idx_ptr + topk_offsets,
-        best_indices.to(tl.int64),
+        best_indices,
         mask=query_mask[:, None],
     )
 
 
-@triton.jit(do_not_specialize=["height", "width", "n_heads", "n_channels", "n_parent", "previous_topk"])
+@triton.jit
 def _fine_attention_int8_kernel(
     query_ptr,
     key_ptr,
@@ -456,13 +455,13 @@ def _fine_attention_int8_kernel(
     previous_topk_idx_ptr,
     output_ptr,
     next_topk_idx_ptr,
-    height,
-    width,
-    n_heads,
-    n_channels,
-    n_parent,
-    previous_topk,
+    height: tl.constexpr,
+    width: tl.constexpr,
+    n_heads: tl.constexpr,
     head_dim: tl.constexpr,
+    n_channels: tl.constexpr,
+    n_parent: tl.constexpr,
+    previous_topk: tl.constexpr,
     next_topk: tl.constexpr,
     sm_scale: tl.constexpr,
     prob_scale: tl.constexpr,
@@ -489,13 +488,12 @@ def _fine_attention_int8_kernel(
 
     d = tl.arange(0, block_d)
     d_mask = d < head_dim
-    spatial_stride = (height * width).to(tl.int64)
-    batch_stride = n_channels.to(tl.int64) * spatial_stride
-    n_tokens = spatial_stride
+    spatial_stride = height * width
+    batch_stride = n_channels * spatial_stride
     query_offsets = (
-        batch.to(tl.int64) * batch_stride
-        + (head * head_dim + d[None, :]).to(tl.int64) * spatial_stride
-        + query_spatial_idx[:, None].to(tl.int64)
+        batch * batch_stride
+        + (head * head_dim + d[None, :]) * spatial_stride
+        + query_spatial_idx[:, None]
     )
     query = tl.load(
         query_ptr + query_offsets,
@@ -509,7 +507,7 @@ def _fine_attention_int8_kernel(
     previous_rank = candidate_offset // 4
     child = candidate_offset % 4
     previous_index_offsets = (
-        ((batch.to(tl.int64) * n_parent + parent_idx) * previous_topk + previous_rank)
+        ((batch * n_parent + parent_idx) * previous_topk + previous_rank)
         * n_heads
         + head
     )
@@ -517,20 +515,18 @@ def _fine_attention_int8_kernel(
         previous_topk_idx_ptr + previous_index_offsets,
         mask=candidate_mask,
         other=0,
-    ).to(tl.int64)
-    previous_width = (width // 2).to(tl.int64)
+    )
+    previous_width = width // 2
     previous_y = previous_indices // previous_width
     previous_x = previous_indices - previous_y * previous_width
-    candidate_y = previous_y * 2 + (child // 2).to(tl.int64)
-    candidate_x = previous_x * 2 + (child % 2).to(tl.int64)
-    candidate_indices = candidate_y * width.to(tl.int64) + candidate_x
-    candidate_mask = candidate_mask & (candidate_indices >= 0) & (candidate_indices < n_tokens)
-    candidate_indices = tl.where(candidate_mask, candidate_indices, 0)
+    candidate_y = previous_y * 2 + child // 2
+    candidate_x = previous_x * 2 + child % 2
+    candidate_indices = candidate_y * width + candidate_x
 
     key_ptrs = (
         key_ptr
-        + batch.to(tl.int64) * batch_stride
-        + (head * head_dim + d[None, :]).to(tl.int64) * spatial_stride
+        + batch * batch_stride
+        + (head * head_dim + d[None, :]) * spatial_stride
         + candidate_indices[:, None]
     )
     keys = tl.load(
@@ -547,7 +543,6 @@ def _fine_attention_int8_kernel(
     )
 
     row_max = tl.max(scores, axis=1)
-    row_max = tl.where(query_mask, row_max, 0.0)
     probabilities = tl.exp(scores - row_max[:, None]).to(tl.float16)
     probabilities = tl.where(
         query_mask[:, None] & candidate_mask[None, :],
@@ -564,8 +559,8 @@ def _fine_attention_int8_kernel(
 
     value_ptrs = (
         value_ptr
-        + batch.to(tl.int64) * batch_stride
-        + (head * head_dim + d[None, :]).to(tl.int64) * spatial_stride
+        + batch * batch_stride
+        + (head * head_dim + d[None, :]) * spatial_stride
         + candidate_indices[:, None]
     )
     values = tl.load(
@@ -579,7 +574,7 @@ def _fine_attention_int8_kernel(
     ).to(tl.float16)
 
     output_offsets = (
-        (((batch.to(tl.int64) * n_parent + parent_idx) * 4 + query_in_parent[:, None])
+        (((batch * n_parent + parent_idx) * 4 + query_in_parent[:, None])
         * n_heads + head) * head_dim
         + d[None, :]
     )
@@ -605,13 +600,13 @@ def _fine_attention_int8_kernel(
             axis=1,
         )
         next_index_offset = (
-            ((batch.to(tl.int64) * height * width + query_spatial_idx.to(tl.int64)) * next_topk + rank)
+            ((batch * height * width + query_spatial_idx) * next_topk + rank)
             * n_heads
             + head
         )
         tl.store(
             next_topk_idx_ptr + next_index_offset,
-            selected_index.to(tl.int64),
+            selected_index,
             mask=query_mask,
         )
         remaining_scores = tl.where(
@@ -621,15 +616,15 @@ def _fine_attention_int8_kernel(
         )
 
 
-@triton.jit(do_not_specialize=["n_pixels", "width", "channels"])
+@triton.jit
 def _depthwise_conv3x3_int8_kernel(
     input_ptr,
     weight_ptr,
     bias_ptr,
     output_ptr,
-    n_pixels,
-    width,
-    channels,
+    n_pixels: tl.constexpr,
+    width: tl.constexpr,
+    channels: tl.constexpr,
     block_pixels: tl.constexpr,
     output_scale: tl.constexpr,
 ):
@@ -646,7 +641,7 @@ def _depthwise_conv3x3_int8_kernel(
     y = pixels // width
     x = pixels - y * width
     height = n_pixels // width
-    channel_base = (batch.to(tl.int64) * channels + channel) * n_pixels.to(tl.int64)
+    channel_base = (batch * channels + channel) * n_pixels
     accumulator = tl.zeros((block_pixels,), dtype=tl.int32)
     accumulator += tl.load(bias_ptr + channel).to(tl.int32)
 
@@ -903,7 +898,7 @@ def coarse_attention_int8(
         block_n=block_n,
         block_d=SUPPORTED_HEAD_DIM,
         num_warps=4,
-        num_stages=1,
+        num_stages=2,
     )
     return output, topk_indices
 
@@ -967,7 +962,7 @@ def fine_attention_int8(
         block_queries=16,
         block_d=SUPPORTED_HEAD_DIM,
         num_warps=4,
-        num_stages=1,
+        num_stages=2,
     )
     return output, next_topk_indices
 
