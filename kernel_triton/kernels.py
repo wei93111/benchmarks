@@ -448,126 +448,6 @@ def _coarse_attention_int8_kernel(
     )
 
 
-@triton.jit(do_not_specialize=["n_tokens", "n_heads", "n_channels"])
-def _coarse_attention_int8_scalar_kernel(
-    query_ptr,
-    key_ptr,
-    value_ptr,
-    output_ptr,
-    topk_idx_ptr,
-    n_tokens,
-    n_heads,
-    n_channels,
-    head_dim: tl.constexpr,
-    topk: tl.constexpr,
-    sm_scale: tl.constexpr,
-    prob_scale: tl.constexpr,
-    input_scale: tl.constexpr,
-    block_n: tl.constexpr,
-    block_d: tl.constexpr,
-):
-    """Conservative one-query INT8 coarse attention for large coarsest maps."""
-    pid = tl.program_id(0)
-    head = pid % n_heads
-    tmp = pid // n_heads
-    query_idx = tmp % n_tokens
-    batch = tmp // n_tokens
-
-    d = tl.arange(0, block_d)
-    d_mask = d < head_dim
-    rank_offsets = tl.arange(0, topk)
-    token_offsets = tl.arange(0, block_n)
-    spatial_stride = n_tokens.to(tl.int64)
-    batch_stride = n_channels.to(tl.int64) * spatial_stride
-    channel = head * head_dim + d
-
-    query_offsets = (
-        batch.to(tl.int64) * batch_stride
-        + channel.to(tl.int64) * spatial_stride
-        + query_idx
-    )
-    query = tl.load(query_ptr + query_offsets, mask=d_mask, other=0).to(tl.int32)
-
-    accumulator = tl.zeros((block_d,), dtype=tl.float32)
-    running_max = -float("inf")
-    running_sum = 0.0
-    best_scores = tl.full((topk,), -float("inf"), dtype=tl.float32)
-    best_indices = tl.zeros((topk,), dtype=tl.int32)
-
-    for key_start in tl.range(0, n_tokens, block_n):
-        key_offsets = key_start + token_offsets
-        key_mask = key_offsets < n_tokens
-        key_ptrs = (
-            key_ptr
-            + batch.to(tl.int64) * batch_stride
-            + channel[None, :].to(tl.int64) * spatial_stride
-            + key_offsets[:, None].to(tl.int64)
-        )
-        keys = tl.load(
-            key_ptrs,
-            mask=key_mask[:, None] & d_mask[None, :],
-            other=0,
-        ).to(tl.int32)
-        scores_i32 = tl.sum(keys * query[None, :], axis=1)
-        scores = (scores_i32.to(tl.float32) * sm_scale).to(tl.float16)
-        scores = tl.where(key_mask, scores, -float("inf"))
-
-        remaining_scores = scores
-        for _ in tl.static_range(0, topk):
-            local_position = tl.argmax(remaining_scores, axis=0)
-            local_score = tl.max(remaining_scores, axis=0)
-            local_index = key_start + local_position
-            minimum_position = tl.argmin(best_scores, axis=0)
-            minimum_score = tl.min(best_scores, axis=0)
-            should_replace = local_score > minimum_score
-            replace_mask = (rank_offsets == minimum_position) & should_replace
-            best_scores = tl.where(replace_mask, local_score, best_scores)
-            best_indices = tl.where(replace_mask, local_index, best_indices)
-            remaining_scores = tl.where(
-                token_offsets == local_position,
-                -float("inf"),
-                remaining_scores,
-            )
-
-        block_max = tl.max(scores, axis=0).to(tl.float32)
-        new_max = tl.maximum(running_max, block_max)
-        old_scale = tl.exp(running_max - new_max)
-        probabilities = tl.exp(scores.to(tl.float32) - new_max)
-        probabilities = tl.where(key_mask, probabilities, 0.0)
-        probabilities_i8 = tl.minimum(
-            tl.maximum(probabilities * prob_scale + 0.5, 0.0),
-            prob_scale,
-        ).to(tl.int32)
-
-        value_ptrs = (
-            value_ptr
-            + batch.to(tl.int64) * batch_stride
-            + channel[None, :].to(tl.int64) * spatial_stride
-            + key_offsets[:, None].to(tl.int64)
-        )
-        values = tl.load(
-            value_ptrs,
-            mask=key_mask[:, None] & d_mask[None, :],
-            other=0,
-        ).to(tl.int32)
-        sv_i32 = tl.sum(probabilities_i8[:, None] * values, axis=0)
-        accumulator = (
-            accumulator * old_scale
-            + sv_i32.to(tl.float32) / (prob_scale * input_scale)
-        )
-        running_sum = running_sum * old_scale + tl.sum(probabilities, axis=0)
-        running_max = new_max
-
-    output_offsets = ((batch.to(tl.int64) * n_tokens + query_idx) * n_heads + head) * head_dim + d
-    tl.store(
-        output_ptr + output_offsets,
-        (accumulator / running_sum).to(tl.float16),
-        mask=d_mask,
-    )
-    topk_offsets = ((batch.to(tl.int64) * n_tokens + query_idx) * topk + rank_offsets) * n_heads + head
-    tl.store(topk_idx_ptr + topk_offsets, best_indices.to(tl.int64))
-
-
 @triton.jit(do_not_specialize=["height", "width", "n_heads", "n_channels", "n_parent", "previous_topk"])
 def _fine_attention_int8_kernel(
     query_ptr,
@@ -1004,49 +884,27 @@ def coarse_attention_int8(
     )
     block_m = 16
     block_n = 64
-    if n_tokens <= block_n:
-        grid = (batch * triton.cdiv(n_tokens, block_m) * heads,)
-        _coarse_attention_int8_kernel[grid](
-            query,
-            key,
-            value,
-            output,
-            topk_indices,
-            n_tokens=n_tokens,
-            n_heads=heads,
-            head_dim=SUPPORTED_HEAD_DIM,
-            n_channels=heads * SUPPORTED_HEAD_DIM,
-            topk=topk,
-            sm_scale=SUPPORTED_HEAD_DIM**-0.5 / (INT8_INPUT_SCALE**2),
-            prob_scale=INT8_PROB_SCALE,
-            input_scale=INT8_INPUT_SCALE,
-            block_m=block_m,
-            block_n=block_n,
-            block_d=SUPPORTED_HEAD_DIM,
-            num_warps=4,
-            num_stages=1,
-        )
-    else:
-        grid = (batch * n_tokens * heads,)
-        _coarse_attention_int8_scalar_kernel[grid](
-            query,
-            key,
-            value,
-            output,
-            topk_indices,
-            n_tokens=n_tokens,
-            n_heads=heads,
-            head_dim=SUPPORTED_HEAD_DIM,
-            n_channels=heads * SUPPORTED_HEAD_DIM,
-            topk=topk,
-            sm_scale=SUPPORTED_HEAD_DIM**-0.5 / (INT8_INPUT_SCALE**2),
-            prob_scale=INT8_PROB_SCALE,
-            input_scale=INT8_INPUT_SCALE,
-            block_n=block_n,
-            block_d=SUPPORTED_HEAD_DIM,
-            num_warps=4,
-            num_stages=1,
-        )
+    grid = (batch * triton.cdiv(n_tokens, block_m) * heads,)
+    _coarse_attention_int8_kernel[grid](
+        query,
+        key,
+        value,
+        output,
+        topk_indices,
+        n_tokens=n_tokens,
+        n_heads=heads,
+        head_dim=SUPPORTED_HEAD_DIM,
+        n_channels=heads * SUPPORTED_HEAD_DIM,
+        topk=topk,
+        sm_scale=SUPPORTED_HEAD_DIM**-0.5 / (INT8_INPUT_SCALE**2),
+        prob_scale=INT8_PROB_SCALE,
+        input_scale=INT8_INPUT_SCALE,
+        block_m=block_m,
+        block_n=block_n,
+        block_d=SUPPORTED_HEAD_DIM,
+        num_warps=4,
+        num_stages=1,
+    )
     return output, topk_indices
 
 
