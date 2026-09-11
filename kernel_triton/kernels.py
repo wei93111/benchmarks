@@ -16,6 +16,8 @@ activations and weights with the required INT32 accumulation semantics.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -27,6 +29,17 @@ SUPPORTED_HEAD_DIM = 64
 INT8_INPUT_SCALE = 16.0
 INT8_WEIGHT_SCALE = 16.0
 INT8_PROB_SCALE = 127.0
+INT8_COARSE_BLOCK_N_1024_ENV = "QT_INT8_COARSE_BLOCK_N_1024"
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}.") from exc
 
 
 @triton.jit
@@ -883,7 +896,11 @@ def coarse_attention_int8(
     elif n_tokens <= 256:
         block_n = 256
     else:
-        block_n = 256
+        block_n = _int_env(INT8_COARSE_BLOCK_N_1024_ENV, 1024)
+        if block_n not in {256, 512, 1024}:
+            raise ValueError(
+                f"{INT8_COARSE_BLOCK_N_1024_ENV} must be one of 256, 512, or 1024."
+            )
     grid = (batch * triton.cdiv(n_tokens, block_m) * heads,)
     _coarse_attention_int8_kernel[grid](
         query,
