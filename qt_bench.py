@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 import math
 import time
 from dataclasses import asdict, dataclass
@@ -740,6 +741,11 @@ def run_latency_sweep(
             )
             print_result(result)
             append_csv(out, result)
+            del attn, queries, keys, values, run_once
+            gc.collect()
+            if is_cuda_backend(backend):
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
 
 
 def run_single_power_loop(
