@@ -7,6 +7,7 @@ Throughput is then work / measured latency, normalized so H=1 B=1 is 1.0.
 Run on the H100 machine, for example:
 
   python3 sweep_batch_throughput.py --backend triton --n 4096 --k 8
+  python3 sweep_batch_throughput.py --backend triton --precision int8-fp16 --n 4096 --k 8
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ import torch
 
 from qt_bench import (
     HEAD_DIM,
+    PRECISION_FP32,
+    PRECISION_VALUES,
     RESULTS_DIR,
     build_case,
     get_device,
@@ -32,6 +35,12 @@ from qt_bench import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("cuda_ref", "triton"), default="triton")
+    parser.add_argument(
+        "--precision",
+        choices=PRECISION_VALUES,
+        default=PRECISION_FP32,
+        help="Arithmetic mode; int8-fp16 is supported by Triton only.",
+    )
     parser.add_argument("--n", type=int, default=4096)
     parser.add_argument("--k", type=int, default=8)
     parser.add_argument("--head-dim", type=int, default=HEAD_DIM)
@@ -40,9 +49,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=RESULTS_DIR / "gpu_batch_throughput.csv",
+        default=None,
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.precision == "int8-fp16" and args.backend != "triton":
+        parser.error("--precision int8-fp16 requires --backend triton")
+    if args.out is None:
+        suffix = "_int8_fp16" if args.precision == "int8-fp16" else ""
+        args.out = RESULTS_DIR / f"gpu_batch_throughput{suffix}.csv"
+    return args
 
 
 def power_of_two_range(start: int, stop: int) -> list[int]:
@@ -61,6 +76,7 @@ def relative_ops(heads: int, batch: int) -> float:
 def measure_one(
     *,
     backend: str,
+    precision: str,
     n: int,
     k: int,
     heads: int,
@@ -75,6 +91,7 @@ def measure_one(
         torch.cuda.synchronize()
     config, attn, queries, keys, values = build_case(
         backend=backend,
+        precision=precision,
         n=n,
         k=k,
         heads=heads,
@@ -102,7 +119,7 @@ def main() -> None:
     )
 
     print(
-        f"Sweeping {args.backend} n={args.n} k={args.k} "
+        f"Sweeping {args.backend} precision={args.precision} n={args.n} k={args.k} "
         f"warmup={args.warmup} iters={args.iters}"
     )
 
@@ -115,6 +132,7 @@ def main() -> None:
             try:
                 result = measure_one(
                     backend=args.backend,
+                    precision=args.precision,
                     n=args.n,
                     k=args.k,
                     heads=heads,
@@ -145,6 +163,7 @@ def main() -> None:
 
             row = {
                 "backend": result.backend,
+                "precision": result.precision,
                 "n": result.n,
                 "k": result.k,
                 "heads": heads,
@@ -184,6 +203,15 @@ def main() -> None:
             f"tput_norm={peak['throughput_norm']:.3f}  "
             f"latency_ms={peak['latency_ms_mean']:.4f}"
         )
+    best_heads, overall_peak = max(
+        peaks.items(),
+        key=lambda item: item[1]["throughput_norm"],
+    )
+    print(
+        f"Overall peak: H={best_heads} B={overall_peak['batch']}  "
+        f"tput_norm={overall_peak['throughput_norm']:.3f}  "
+        f"latency_ms={overall_peak['latency_ms_mean']:.4f}"
+    )
 
 
 if __name__ == "__main__":
